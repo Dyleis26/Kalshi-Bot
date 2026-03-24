@@ -4,7 +4,7 @@ import threading
 import requests
 import websocket
 import pandas as pd
-from administration.config import CANDLE_LIMIT
+from administration.config import CANDLE_LIMIT, ASSETS
 from administration.logger import get as get_logger
 
 logger = get_logger("kraken")
@@ -19,18 +19,19 @@ INTERVAL_MAP = {
     "1m":  1,
 }
 
-SYMBOL_REST = "XBTUSD"   # Kraken REST symbol for BTC/USD
-SYMBOL_WS   = "BTC/USD"  # Kraken WebSocket symbol
+# Map WebSocket symbol → asset name (e.g. "BTC/USD" → "BTC")
+WS_TO_ASSET = {cfg["kraken_ws"]: asset for asset, cfg in ASSETS.items()}
 
 
 class KrakenFeed:
     def __init__(self):
-        self.latest_price = None
+        self.latest_prices: dict = {asset: None for asset in ASSETS}  # per-asset live price
         self._ws = None
         self._ws_thread = None
         self._running = False
-        self._callbacks = {}
-        # Candle close detection: track last seen timestamp per interval
+        self._on_15m = None   # callback(asset, candle)
+        self._on_tick = None  # callback(asset, price)
+        # Candle close detection: keyed by (ws_symbol, interval)
         self._last_ts: dict = {}
         self._last_data: dict = {}
 
@@ -38,53 +39,49 @@ class KrakenFeed:
     #  REST — Historical Candles                                           #
     # ------------------------------------------------------------------ #
 
-    def get_candles(self, interval: str, limit: int = CANDLE_LIMIT) -> pd.DataFrame:
+    def get_candles(self, interval: str, asset: str = "BTC", limit: int = CANDLE_LIMIT) -> pd.DataFrame:
         """Fetch historical OHLCV candles via Kraken REST API."""
         minutes = INTERVAL_MAP.get(interval, 60)
-        # Kraken returns up to 720 candles; calculate since timestamp for limit
+        symbol_rest = ASSETS[asset]["kraken_rest"]
         since = int(time.time()) - (minutes * 60 * limit)
         try:
             r = requests.get(f"{REST_URL}/OHLC", params={
-                "pair":     SYMBOL_REST,
+                "pair":     symbol_rest,
                 "interval": minutes,
                 "since":    since,
             }, timeout=10)
             r.raise_for_status()
             data = r.json()
             if data.get("error"):
-                logger.error(f"Kraken REST error: {data['error']}")
+                logger.error(f"Kraken REST error ({asset}): {data['error']}")
                 return pd.DataFrame()
-            # Result key is the pair name (e.g. 'XXBTZUSD')
             pair_key = list(data["result"].keys())[0]
             raw = data["result"][pair_key]
             return self._to_dataframe(raw)
         except Exception as e:
-            logger.error(f"Failed to fetch {interval} candles: {e}")
+            logger.error(f"Failed to fetch {interval} candles for {asset}: {e}")
             return pd.DataFrame()
 
-    def get_trend_candles(self) -> pd.DataFrame:
+    def get_trend_candles(self, asset: str = "BTC") -> pd.DataFrame:
         """1H candles for RSI + MACD trend filter."""
-        return self.get_candles("1h")
+        return self.get_candles("1h", asset)
 
-    def get_entry_candles(self) -> pd.DataFrame:
+    def get_entry_candles(self, asset: str = "BTC") -> pd.DataFrame:
         """15M candles for Momentum + VWAP entry signal."""
-        return self.get_candles("15m")
+        return self.get_candles("15m", asset)
 
     # ------------------------------------------------------------------ #
     #  WebSocket — Live Streams                                            #
     # ------------------------------------------------------------------ #
 
-    def start_streams(self, on_1h=None, on_15m=None, on_1m=None):
+    def start_streams(self, on_15m=None, on_tick=None):
         """
-        Start live WebSocket streams for 1H, 15M candles and 1M ticker.
-        Candle callbacks fire only on closed candles.
-        Ticker callback fires on every price update.
+        Start live WebSocket streams for all assets (15M OHLC + ticker).
+        on_15m(asset, candle) fires on each closed 15M candle.
+        on_tick(asset, price) fires on every ticker price update.
         """
-        self._callbacks = {
-            "1h":  on_1h,
-            "15m": on_15m,
-            "1m":  on_1m,
-        }
+        self._on_15m = on_15m
+        self._on_tick = on_tick
         self._running = True
         self._ws_thread = threading.Thread(target=self._run_ws, daemon=True)
         self._ws_thread.start()
@@ -118,11 +115,11 @@ class KrakenFeed:
 
     def _on_open(self, ws):
         logger.info("Kraken WebSocket connected.")
-        # Kraken v2 only allows ONE ohlc interval per connection — subscribe to 15M only.
-        # 1H data is refreshed from REST in the heartbeat (RSI/MACD are slow indicators).
+        all_symbols = [cfg["kraken_ws"] for cfg in ASSETS.values()]
+        # ONE ohlc interval per connection — 15M only. 1H refreshed via REST in heartbeat.
         subscriptions = [
-            {"method": "subscribe", "params": {"channel": "ohlc", "symbol": [SYMBOL_WS], "interval": 15}},
-            {"method": "subscribe", "params": {"channel": "ticker", "symbol": [SYMBOL_WS]}},
+            {"method": "subscribe", "params": {"channel": "ohlc",   "symbol": all_symbols, "interval": 15}},
+            {"method": "subscribe", "params": {"channel": "ticker",  "symbol": all_symbols}},
         ]
         for sub in subscriptions:
             ws.send(json.dumps(sub))
@@ -148,24 +145,27 @@ class KrakenFeed:
 
     def _handle_ohlc(self, msg):
         """
-        Detect closed candles by watching for a timestamp change.
-        Kraken WebSocket v2 sends confirm=null on every update, so we cannot
-        rely on the confirm field. Instead: when the candle timestamp changes,
-        the previous candle just closed — fire the callback with its final data.
+        Detect closed candles by watching for a timestamp change, per symbol.
+        When the candle timestamp changes, the previous candle just closed.
         """
         data = msg.get("data", [{}])[0]
-        interval = data.get("interval")
-        candle_ts = data.get("interval_begin")  # ISO string: candle open time
+        ws_symbol = data.get("symbol")
+        interval  = data.get("interval")
+        candle_ts = data.get("interval_begin")
+        asset     = WS_TO_ASSET.get(ws_symbol)
 
-        if interval not in self._last_ts:
-            # First update for this interval — initialise, don't fire yet
-            self._last_ts[interval] = candle_ts
-            self._last_data[interval] = data
+        if not asset:
             return
 
-        if candle_ts != self._last_ts[interval]:
-            # Candle rolled over — previous candle is now closed
-            closed = self._last_data[interval]
+        key = (ws_symbol, interval)
+
+        if key not in self._last_ts:
+            self._last_ts[key]   = candle_ts
+            self._last_data[key] = data
+            return
+
+        if candle_ts != self._last_ts[key]:
+            closed = self._last_data[key]
             candle = {
                 "time":   pd.to_datetime(closed["interval_begin"], utc=True).tz_convert(None),
                 "open":   float(closed["open"]),
@@ -174,24 +174,23 @@ class KrakenFeed:
                 "close":  float(closed["close"]),
                 "volume": float(closed["volume"]),
             }
-            logger.debug(f"Candle closed: interval={interval} ts={closed['interval_begin']} close={closed['close']}")
-            if interval == 60 and self._callbacks.get("1h"):
-                self._callbacks["1h"](candle)
-            elif interval == 15 and self._callbacks.get("15m"):
-                self._callbacks["15m"](candle)
-            self._last_ts[interval] = candle_ts
+            logger.debug(f"Candle closed: {asset} interval={interval} close={closed['close']}")
+            if interval == 15 and self._on_15m:
+                self._on_15m(asset, candle)
+            self._last_ts[key] = candle_ts
 
-        # Always update latest candle data
-        self._last_data[interval] = data
+        self._last_data[key] = data
 
     def _handle_ticker(self, msg):
-        """Process a live ticker update and fire the 1M price callback."""
+        """Process a live ticker update and fire the price callback."""
         data = msg.get("data", [{}])[0]
-        price = float(data.get("last", 0))
-        if price:
-            self.latest_price = price
-            if self._callbacks.get("1m"):
-                self._callbacks["1m"](price)
+        ws_symbol = data.get("symbol")
+        asset     = WS_TO_ASSET.get(ws_symbol)
+        price     = float(data.get("last", 0))
+        if asset and price:
+            self.latest_prices[asset] = price
+            if self._on_tick:
+                self._on_tick(asset, price)
 
     # ------------------------------------------------------------------ #
     #  Parser                                                              #

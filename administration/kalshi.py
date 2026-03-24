@@ -3,7 +3,7 @@ import base64
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from administration.config import KALSHI_API_KEY, KALSHI_KEY_PATH
+from administration.config import KALSHI_API_KEY, KALSHI_KEY_PATH, ASSETS
 from administration.logger import log_error
 from administration.security import rate_limited_call
 
@@ -34,10 +34,13 @@ class KalshiClient:
     def _sign(self, method: str, path: str) -> dict:
         """
         Build Kalshi RSA-SHA256 auth headers.
-        Signature = RSA-SHA256(private_key, timestamp + method + path)
+        Signature = RSA-SHA256(private_key, timestamp + method + full_path)
+        full_path includes the base path prefix (e.g. /trade-api/v2/markets)
         """
+        from urllib.parse import urlparse
+        base_path = urlparse(self.base).path  # e.g. "/trade-api/v2"
         timestamp = str(int(time.time() * 1000))
-        message = (timestamp + method.upper() + path).encode("utf-8")
+        message = (timestamp + method.upper() + base_path + path).encode("utf-8")
         signature = self._private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())
         sig_b64 = base64.b64encode(signature).decode("utf-8")
 
@@ -76,16 +79,16 @@ class KalshiClient:
     #  Market                                                              #
     # ------------------------------------------------------------------ #
 
-    def get_btc_market(self):
+    def get_market_for_asset(self, asset: str) -> dict | None:
         """
-        Find the active BTC 15-minute Up/Down market.
+        Find the active 15-minute Up/Down market for the given asset.
         Returns the market dict or None if not found.
         """
+        series = ASSETS.get(asset, {}).get("kalshi_series")
+        if not series:
+            return None
         try:
-            data = self._get("/markets", params={
-                "status": "open",
-                "series_ticker": "KXBTC"
-            })
+            data = self._get("/markets", params={"status": "open", "series_ticker": series})
             markets = data.get("markets", [])
             for m in markets:
                 title = m.get("title", "").lower()
@@ -93,8 +96,12 @@ class KalshiClient:
                     return m
             return markets[0] if markets else None
         except Exception as e:
-            log_error("Failed to fetch BTC market", e)
+            log_error(f"Failed to fetch {asset} market", e)
             return None
+
+    def get_btc_market(self):
+        """Convenience wrapper — returns BTC 15M market."""
+        return self.get_market_for_asset("BTC")
 
     def get_market(self, ticker: str) -> dict:
         """Fetch a single market by ticker (works for open, closed, and settled)."""

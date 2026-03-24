@@ -3,13 +3,12 @@ import pandas as pd
 from data.kraken import KrakenFeed
 from administration.config import INTERVALS, CANDLE_LIMIT
 
-SYMBOL = "BTCUSD"
-
 STORAGE_DIR = os.path.join(os.path.dirname(__file__), "storage")
 
 
 class History:
-    def __init__(self):
+    def __init__(self, asset: str = "BTC"):
+        self.asset = asset
         os.makedirs(STORAGE_DIR, exist_ok=True)
         self.feed = KrakenFeed()
 
@@ -25,7 +24,7 @@ class History:
         """
         path = self._path(interval)
         if not os.path.exists(path):
-            df = self.feed.get_candles(interval, limit=CANDLE_LIMIT)
+            df = self.feed.get_candles(interval, asset=self.asset, limit=CANDLE_LIMIT)
             self._save(df, path)
             return df
 
@@ -63,9 +62,9 @@ class History:
     def _update(self, df, interval):
         """Fetch candles newer than the last saved candle and append them."""
         if df.empty:
-            return self.feed.get_candles(interval, limit=CANDLE_LIMIT)
+            return self.feed.get_candles(interval, asset=self.asset, limit=CANDLE_LIMIT)
 
-        fresh = self.feed.get_candles(interval, limit=CANDLE_LIMIT)
+        fresh = self.feed.get_candles(interval, asset=self.asset, limit=CANDLE_LIMIT)
         last_saved = df["time"].iloc[-1]
         new_rows = fresh[fresh["time"] > last_saved]
 
@@ -74,7 +73,7 @@ class History:
         return pd.concat([df, new_rows], ignore_index=True)
 
     def _path(self, interval):
-        filename = f"{SYMBOL}_{interval}.csv"
+        filename = f"{self.asset}USD_{interval}.csv"
         return os.path.join(STORAGE_DIR, filename)
 
     def _save(self, df, path):

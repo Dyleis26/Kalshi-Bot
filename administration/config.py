@@ -14,6 +14,16 @@ KALSHI_KEY_PATH = os.getenv(
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
+# --- Assets ---
+ASSETS = {
+    "BTC":  {"kraken_rest": "XBTUSD",  "kraken_ws": "BTC/USD",  "kalshi_series": "KXBTC"},
+    "ETH":  {"kraken_rest": "ETHUSD",  "kraken_ws": "ETH/USD",  "kalshi_series": "KXETH"},
+    "SOL":  {"kraken_rest": "SOLUSD",  "kraken_ws": "SOL/USD",  "kalshi_series": "KXSOL"},
+    "XRP":  {"kraken_rest": "XRPUSD",  "kraken_ws": "XRP/USD",  "kalshi_series": "KXXRP"},
+    "DOGE": {"kraken_rest": "XDGUSD",  "kraken_ws": "DOGE/USD", "kalshi_series": "KXDOGE"},
+}
+NUM_SLOTS = len(ASSETS)  # 5 — one capital slot per asset
+
 # --- Market ---
 INTERVALS = {
     "trend": "1h",    # RSI + MACD filter
@@ -33,7 +43,7 @@ FORCE_TRADE = True    # Data collection mode: majority vote, trades every window
 # --- Execution ---
 LIMIT_ORDER_OFFSET = 0.02   # Place limit 2 cents below ask
 ORDER_TIMEOUT_SECS = 120    # Cancel unfilled orders after 2 minutes
-MAX_TRADES_PER_HOUR = 4     # 4 per hour = every 15M window (data collection)
+MAX_TRADES_PER_HOUR = 4     # 4 per hour per asset (paper.py multiplies by NUM_SLOTS)
 
 # --- Portfolio ---
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.00"))

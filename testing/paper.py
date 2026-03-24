@@ -7,7 +7,7 @@ from administration.portfolio import Portfolio
 from administration.monitor import Monitor
 from administration.discord import Discord
 from administration.config import (
-    STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE
+    STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, ASSETS
 )
 from administration.kalshi import KalshiClient
 from data.kraken import KrakenFeed
@@ -21,59 +21,67 @@ logger = get_logger("paper")
 
 class PaperTrader:
     """
-    Simulated live trading using real Kraken price data.
-    No real orders are placed — everything is tracked internally.
+    Simulated live trading across 5 crypto assets using real Kraken price data.
+    Each asset runs independently with its own data, signals, and trade resolution.
     """
 
     def __init__(self, starting_balance: float = STARTING_BALANCE):
         self.portfolio = Portfolio(starting_balance)
-        self.strategy = Strategy()
-        self.feed = KrakenFeed()
-        self.history = History()
-        self.monitor = Monitor()
-        self.discord = Discord(paper=True)
+        self.strategy  = Strategy()
+        self.feed      = KrakenFeed()
+        self.monitor   = Monitor()
+        self.discord   = Discord(paper=True)
         self.trade_log = TradeLog(mode="paper")
-        self.kalshi = KalshiClient(paper=False)  # live URL for real market settlement data
+        self.kalshi    = KalshiClient(paper=False)
 
-        # Live candle buffers
-        self.df_1h: pd.DataFrame = pd.DataFrame()
-        self.df_15m: pd.DataFrame = pd.DataFrame()
-        self.live_price: float = 0.0
+        # Per-asset state: dataframes, live price, history manager
+        self.assets: dict = {
+            asset: {
+                "df_1h":   pd.DataFrame(),
+                "df_15m":  pd.DataFrame(),
+                "price":   0.0,
+                "history": History(asset),
+            }
+            for asset in ASSETS
+        }
 
-        # State
-        self.running = False
-        self.trades_this_hour = 0
+        # Trade rate limiting (shared across all assets)
+        self.trades_this_hour  = 0
         self.hour_window_start = time.monotonic()
-        self._lock = threading.Lock()
-        self._ready_at = None  # set on start, trades blocked for first 60s
+
+        self.running   = False
+        self._lock     = threading.Lock()
+        self._ready_at = None
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
     # ------------------------------------------------------------------ #
 
     def start(self):
-        logger.info("Paper trader starting...")
+        logger.info("Paper trader starting (5 assets)...")
         self.discord.start()
 
-        data = self.history.load_all()
-        self.df_1h = data["1h"]
-        self.df_15m = data["15m"]
+        # Load historical candles for all assets
+        for asset, state in self.assets.items():
+            logger.info(f"Loading history for {asset}...")
+            data = state["history"].load_all()
+            state["df_1h"]  = data["1h"]
+            state["df_15m"] = data["15m"]
 
-        self.monitor.set_connected("kraken", True)
-        self.monitor.set_connected("kalshi", True)
+        self.monitor.set_connected("kraken",  True)
+        self.monitor.set_connected("kalshi",  True)
         self.monitor.set_connected("discord", self.discord.is_ready())
 
         self.discord.bot_started(self.portfolio.total)
-        self.running = True
-        self._ready_at = time.monotonic() + 60  # 1-minute warmup before first trade
+        self.running   = True
+        self._ready_at = time.monotonic() + 60  # 1-minute warmup
 
         self.feed.start_streams(
-            on_1h=self._on_1h_candle,
             on_15m=self._on_15m_candle,
-            on_1m=self._on_tick,
+            on_tick=self._on_tick,
         )
 
-        logger.info("Paper trader running. Waiting for signals...")
+        logger.info("Paper trader running. Waiting for signals on BTC, ETH, SOL, XRP, DOGE...")
         self._heartbeat()
 
     def stop(self, reason: str = "Manual stop"):
@@ -87,38 +95,41 @@ class PaperTrader:
     #  WebSocket Handlers                                                  #
     # ------------------------------------------------------------------ #
 
-    def _on_1h_candle(self, candle: dict):
+    def _on_15m_candle(self, asset: str, candle: dict):
+        if asset not in self.assets:
+            return
         with self._lock:
             row = pd.DataFrame([candle])[["time", "open", "high", "low", "close", "volume"]]
-            self.df_1h = pd.concat([self.df_1h, row], ignore_index=True).tail(300)
-            self.history.append(candle, "1h")
+            state = self.assets[asset]
+            state["df_15m"] = pd.concat([state["df_15m"], row], ignore_index=True).tail(300)
+            state["history"].append(candle, "15m")
+        self._evaluate(asset)
 
-    def _on_15m_candle(self, candle: dict):
-        with self._lock:
-            row = pd.DataFrame([candle])[["time", "open", "high", "low", "close", "volume"]]
-            self.df_15m = pd.concat([self.df_15m, row], ignore_index=True).tail(300)
-            self.history.append(candle, "15m")
-        self._evaluate()
-
-    def _on_tick(self, price: float):
-        self.live_price = price
+    def _on_tick(self, asset: str, price: float):
+        if asset in self.assets:
+            self.assets[asset]["price"] = price
 
     # ------------------------------------------------------------------ #
     #  Signal Evaluation & Trade Execution                                 #
     # ------------------------------------------------------------------ #
 
-    def _evaluate(self):
+    def _evaluate(self, asset: str):
         if time.monotonic() < self._ready_at:
             return
         if not FORCE_TRADE and not self.portfolio.can_trade():
             return
         if not self._within_trade_limit():
             return
-        if len(self.df_1h) < 35 or len(self.df_15m) < 10:
+
+        state = self.assets[asset]
+        if len(state["df_1h"]) < 35 or len(state["df_15m"]) < 10:
             return
 
         with self._lock:
-            decision = self.strategy.decide(self.df_1h.copy(), self.df_15m.copy())
+            decision = self.strategy.decide(
+                state["df_1h"].copy(),
+                state["df_15m"].copy(),
+            )
 
         direction = decision["direction"]
         self.monitor.record_signal(direction, decision["signals"])
@@ -126,45 +137,47 @@ class PaperTrader:
         if direction == NONE:
             return
 
-        self._simulate_trade(direction, decision)
+        self._simulate_trade(asset, direction, decision)
 
-    def _simulate_trade(self, direction: str, decision: dict):
-        contract_price = 0.50  # Paper trade assumption
-        size = self.strategy.size()
+    def _simulate_trade(self, asset: str, direction: str, decision: dict):
+        contract_price = 0.50
+        size           = self.strategy.size()
 
-        # Calculate contracts and costs
         contracts = math.floor(size / contract_price)
         if contracts < 1:
             return
 
-        actual_cost = contracts * contract_price
-        fee_entry = KALSHI_MAKER_FEE * actual_cost * (1 - contract_price)
-        total_cost = round(actual_cost + fee_entry, 2)
-        payout = round(contracts * 1.00, 2)
-        price_pct = contract_price * 100
+        actual_cost      = contracts * contract_price
+        fee_entry        = KALSHI_MAKER_FEE * actual_cost * (1 - contract_price)
+        total_cost       = round(actual_cost + fee_entry, 2)
+        payout           = round(contracts * 1.00, 2)
+        price_pct        = contract_price * 100
+        live_price       = self.assets[asset]["price"]
+        portfolio_after  = round(self.portfolio.total - total_cost, 2)
 
-        # Portfolio value after buy (cash + remaining capital - cost)
-        portfolio_after_buy = round(self.portfolio.total - total_cost, 2)
-
-        # Log trade entry
         trade_id = self.trade_log.open_trade(
             direction=direction,
             contracts=contracts,
             contract_price_pct=price_pct,
             cost=total_cost,
             possible_payout=payout,
-            btc_price=self.live_price,
+            btc_price=live_price,
             signals=decision["signals"],
         )
 
-        # Grab the Kalshi market ticker that covers the upcoming outcome window
-        kalshi_ticker = self.kalshi.get_btc_market_ticker()
-        if kalshi_ticker:
-            logger.info(f"Outcome market ticker: {kalshi_ticker}")
-        else:
-            logger.warning("Could not fetch Kalshi market ticker — will fall back to Kraken for resolution")
+        # Capture Kalshi market ticker for ground-truth settlement
+        kalshi_ticker = None
+        try:
+            m = self.kalshi.get_market_for_asset(asset)
+            kalshi_ticker = m.get("ticker") if m else None
+            if kalshi_ticker:
+                logger.info(f"{asset} outcome market: {kalshi_ticker}")
+            else:
+                logger.warning(f"{asset}: no Kalshi ticker found — will fall back to Kraken")
+        except Exception:
+            pass
 
-        log_trade(direction, self.live_price, total_cost)
+        log_trade(direction, live_price, total_cost)
         self.monitor.record_order_placed()
         self.trades_this_hour += 1
 
@@ -174,52 +187,53 @@ class PaperTrader:
             price_pct=price_pct,
             cost=total_cost,
             payout=payout,
-            portfolio_total=portfolio_after_buy,
+            portfolio_total=portfolio_after,
         )
 
         threading.Timer(
             15 * 60,
             self._resolve_trade,
-            args=[direction, contracts, contract_price, price_pct, trade_id, kalshi_ticker]
+            args=[asset, direction, contracts, contract_price, price_pct, trade_id, kalshi_ticker]
         ).start()
 
-    def _resolve_trade(self, direction: str, contracts: int,
-                       contract_price: float, price_pct: float, trade_id: str,
-                       kalshi_ticker: str = None):
-        # --- Determine outcome via Kalshi settlement (ground truth) ---
+    def _resolve_trade(self, asset: str, direction: str, contracts: int,
+                       contract_price: float, price_pct: float,
+                       trade_id: str, kalshi_ticker: str = None):
+
+        # Kalshi settlement (ground truth)
         kalshi_result = None
         if kalshi_ticker:
             kalshi_result = self.kalshi.get_market_result(kalshi_ticker)
             if kalshi_result:
-                logger.info(f"Kalshi settled {kalshi_ticker}: {kalshi_result.upper()}")
+                logger.info(f"Kalshi settled {asset} {kalshi_ticker}: {kalshi_result.upper()}")
             else:
-                logger.warning(f"Kalshi settlement not available for {kalshi_ticker} — falling back to Kraken")
+                logger.warning(f"{asset}: Kalshi settlement unavailable — falling back to Kraken")
 
+        state = self.assets[asset]
         with self._lock:
-            if self.df_15m.empty or len(self.df_15m) < 2:
+            if state["df_15m"].empty or len(state["df_15m"]) < 2:
                 return
-            last = self.df_15m.iloc[-1]
-            went_up = last["close"] > last["open"]
-            btc_candle = last.to_dict()
+            last       = state["df_15m"].iloc[-1]
+            went_up    = last["close"] > last["open"]
+            last_candle = last.to_dict()
 
         if kalshi_result:
-            # Ground truth: use Kalshi's actual settlement
             kalshi_side = "yes" if direction == LONG else "no"
             win = (kalshi_result == kalshi_side)
         else:
-            # Fallback: estimate from Kraken candle direction
             win = (direction == LONG and went_up) or (direction == SHORT and not went_up)
 
         actual_cost = contracts * contract_price
-        fee = KALSHI_MAKER_FEE * actual_cost * (1 - contract_price)
+        fee         = KALSHI_MAKER_FEE * actual_cost * (1 - contract_price)
+        live_price  = state["price"]
 
         if win:
             gross = contracts * 1.00
-            pnl = round(gross - actual_cost - fee, 4)
+            pnl   = round(gross - actual_cost - fee, 4)
             self.portfolio.record_win(pnl)
-            log_trade(direction, self.live_price, actual_cost, result="win", pnl=pnl)
+            log_trade(direction, live_price, actual_cost, result="win", pnl=pnl)
             self.monitor.record_trade_result("win")
-            self.trade_log.close_trade(trade_id, "win", pnl, fee, btc_candle, self.portfolio.summary())
+            self.trade_log.close_trade(trade_id, "win", pnl, fee, last_candle, self.portfolio.summary())
             self.discord.sell_win(
                 direction=direction,
                 contracts=contracts,
@@ -230,9 +244,9 @@ class PaperTrader:
         else:
             pnl = round(-(actual_cost) - fee, 4)
             self.portfolio.record_loss(abs(pnl))
-            log_trade(direction, self.live_price, actual_cost, result="loss", pnl=pnl)
+            log_trade(direction, live_price, actual_cost, result="loss", pnl=pnl)
             self.monitor.record_trade_result("loss")
-            self.trade_log.close_trade(trade_id, "loss", pnl, fee, btc_candle, self.portfolio.summary())
+            self.trade_log.close_trade(trade_id, "loss", pnl, fee, last_candle, self.portfolio.summary())
             self.discord.sell_loss(
                 direction=direction,
                 contracts=contracts,
@@ -241,7 +255,7 @@ class PaperTrader:
                 portfolio_total=self.portfolio.total,
             )
 
-        if not self.portfolio.can_trade():
+        if not FORCE_TRADE and not self.portfolio.can_trade():
             reason = "Daily loss limit reached"
             log_halt(reason)
             self.monitor.set_halt(True, reason)
@@ -254,9 +268,9 @@ class PaperTrader:
     def _within_trade_limit(self) -> bool:
         now = time.monotonic()
         if now - self.hour_window_start >= 3600:
-            self.trades_this_hour = 0
+            self.trades_this_hour  = 0
             self.hour_window_start = now
-        return self.trades_this_hour < MAX_TRADES_PER_HOUR
+        return self.trades_this_hour < MAX_TRADES_PER_HOUR * len(ASSETS)
 
     # ------------------------------------------------------------------ #
     #  Heartbeat                                                           #
@@ -267,10 +281,11 @@ class PaperTrader:
             while self.running:
                 time.sleep(900)
                 self.monitor.print_status()
-                # Refresh 1H candles from REST — WebSocket only subscribes to 15M
-                fresh_1h = self.history.load("1h")
-                with self._lock:
-                    self.df_1h = fresh_1h
+                # Refresh 1H candles from REST for all assets
+                for asset, state in self.assets.items():
+                    fresh_1h = state["history"].load("1h")
+                    with self._lock:
+                        state["df_1h"] = fresh_1h
                 if self._is_new_day():
                     self.portfolio.reset_day()
         except KeyboardInterrupt:

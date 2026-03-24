@@ -30,6 +30,9 @@ class KrakenFeed:
         self._ws_thread = None
         self._running = False
         self._callbacks = {}
+        # Candle close detection: track last seen timestamp per interval
+        self._last_ts: dict = {}
+        self._last_data: dict = {}
 
     # ------------------------------------------------------------------ #
     #  REST — Historical Candles                                           #
@@ -115,9 +118,9 @@ class KrakenFeed:
 
     def _on_open(self, ws):
         logger.info("Kraken WebSocket connected.")
-        # Subscribe to OHLC for 1H, 15M and ticker for live price
+        # Kraken v2 only allows ONE ohlc interval per connection — subscribe to 15M only.
+        # 1H data is refreshed from REST in the heartbeat (RSI/MACD are slow indicators).
         subscriptions = [
-            {"method": "subscribe", "params": {"channel": "ohlc", "symbol": [SYMBOL_WS], "interval": 60}},
             {"method": "subscribe", "params": {"channel": "ohlc", "symbol": [SYMBOL_WS], "interval": 15}},
             {"method": "subscribe", "params": {"channel": "ticker", "symbol": [SYMBOL_WS]}},
         ]
@@ -144,27 +147,42 @@ class KrakenFeed:
         logger.warning(f"Kraken WebSocket closed: {code} {msg}")
 
     def _handle_ohlc(self, msg):
-        """Process a closed OHLC candle and fire the appropriate callback."""
+        """
+        Detect closed candles by watching for a timestamp change.
+        Kraken WebSocket v2 sends confirm=null on every update, so we cannot
+        rely on the confirm field. Instead: when the candle timestamp changes,
+        the previous candle just closed — fire the callback with its final data.
+        """
         data = msg.get("data", [{}])[0]
         interval = data.get("interval")
-        # Only fire on confirmed (closed) candles
-        if not data.get("confirm", False):
+        candle_ts = data.get("interval_begin")  # ISO string: candle open time
+
+        if interval not in self._last_ts:
+            # First update for this interval — initialise, don't fire yet
+            self._last_ts[interval] = candle_ts
+            self._last_data[interval] = data
             return
 
-        candle = {
-            "time":   pd.to_datetime(data["timestamp"]),
-            "open":   float(data["open"]),
-            "high":   float(data["high"]),
-            "low":    float(data["low"]),
-            "close":  float(data["close"]),
-            "volume": float(data["volume"]),
-            "closed": True,
-        }
+        if candle_ts != self._last_ts[interval]:
+            # Candle rolled over — previous candle is now closed
+            closed = self._last_data[interval]
+            candle = {
+                "time":   pd.to_datetime(closed["interval_begin"], utc=True).tz_convert(None),
+                "open":   float(closed["open"]),
+                "high":   float(closed["high"]),
+                "low":    float(closed["low"]),
+                "close":  float(closed["close"]),
+                "volume": float(closed["volume"]),
+            }
+            logger.debug(f"Candle closed: interval={interval} ts={closed['interval_begin']} close={closed['close']}")
+            if interval == 60 and self._callbacks.get("1h"):
+                self._callbacks["1h"](candle)
+            elif interval == 15 and self._callbacks.get("15m"):
+                self._callbacks["15m"](candle)
+            self._last_ts[interval] = candle_ts
 
-        if interval == 60 and self._callbacks.get("1h"):
-            self._callbacks["1h"](candle)
-        elif interval == 15 and self._callbacks.get("15m"):
-            self._callbacks["15m"](candle)
+        # Always update latest candle data
+        self._last_data[interval] = data
 
     def _handle_ticker(self, msg):
         """Process a live ticker update and fire the 1M price callback."""
@@ -184,8 +202,7 @@ class KrakenFeed:
         df = pd.DataFrame(raw, columns=[
             "time", "open", "high", "low", "close", "vwap", "volume", "count"
         ])
-        df = df.copy()
         df["time"] = pd.to_datetime(df["time"].astype(int), unit="s")
         for col in ["open", "high", "low", "close", "volume"]:
-            df[col] = df[col].astype(float)
+            df.loc[:, col] = df[col].astype(float)
         return df[["time", "open", "high", "low", "close", "volume"]].reset_index(drop=True)

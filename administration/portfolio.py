@@ -1,7 +1,8 @@
 from administration.config import (
     STARTING_BALANCE, CASH_SPLIT, CAPITAL_SPLIT,
     PROFIT_TO_CASH, PROFIT_TO_CAPITAL,
-    DAILY_LOSS_LIMIT, MAX_LOSING_STREAK, LOSING_STREAK_REDUCTION
+    DAILY_LOSS_LIMIT, MAX_LOSING_STREAK, LOSING_STREAK_REDUCTION,
+    MIN_BET
 )
 
 
@@ -83,7 +84,7 @@ class Portfolio:
         """Returns True if bot is allowed to place a new trade."""
         if self.is_halted:
             return False
-        if self.capital <= 0:
+        if self.capital < MIN_BET:
             return False
         return True
 

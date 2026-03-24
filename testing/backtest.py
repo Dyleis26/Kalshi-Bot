@@ -45,12 +45,22 @@ class Backtest:
 
         self.portfolio.reset_day()
         skipped = 0
+        current_day = None
 
-        for i in range(MIN_15M_CANDLES, len(self.df_15m)):
+        for i in range(MIN_15M_CANDLES, len(self.df_15m) - 1):
             candle = self.df_15m.iloc[i]
 
             # Match 1H candles up to this point in time
             candle_time = candle["time"]
+
+            # Daily reset — mirrors paper/live behavior
+            candle_date = pd.Timestamp(candle_time).date()
+            if current_day is None:
+                current_day = candle_date
+            elif candle_date != current_day:
+                current_day = candle_date
+                self.portfolio.reset_day()
+
             df_1h_window = self.df_1h[self.df_1h["time"] <= candle_time]
 
             if len(df_1h_window) < MIN_1H_CANDLES:
@@ -79,10 +89,8 @@ class Backtest:
                 size_multiplier=self.portfolio.size_multiplier
             )
 
-            # Determine outcome: compare next candle's close to this candle's open
+            # Determine outcome on the next candle (i+1)
             outcome = self._resolve_outcome(direction, i)
-            if outcome is None:
-                continue  # No next candle available
 
             # Calculate PnL
             pnl = self._calculate_pnl(outcome, size, contract_price)
@@ -116,10 +124,11 @@ class Backtest:
 
     def _resolve_outcome(self, direction: str, candle_idx: int):
         """
-        Kalshi BTC 15M Up/Down: compare open of current candle to close.
-        WIN if direction matches actual price movement.
+        Kalshi BTC 15M Up/Down: signals fire on close of candle i, trade
+        resolves on the NEXT candle (i+1). Compare next candle's close to open.
+        WIN if direction matches actual price movement of the next window.
         """
-        candle = self.df_15m.iloc[candle_idx]
+        candle = self.df_15m.iloc[candle_idx + 1]
         open_price = candle["open"]
         close_price = candle["close"]
 
@@ -146,7 +155,7 @@ class Backtest:
         Win:  size × (1 - contract_price) - fee
         Loss: -size + fee (already lost stake, still pay fee)
         """
-        fee = self.fee_rate * size * contract_price * (1 - contract_price)
+        fee = self.fee_rate * size * (1 - contract_price)
 
         if outcome == "win":
             gross = size * (1 - contract_price) / contract_price

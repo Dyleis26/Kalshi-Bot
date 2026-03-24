@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
-from administration.config import RSI_PERIOD, RSI_BULL, RSI_BEAR, MOMENTUM_MIN
+import administration.config as cfg
+from administration.config import RSI_PERIOD
 
 
 # ------------------------------------------------------------------ #
@@ -29,9 +30,9 @@ def rsi_bias(rsi_val: float) -> str:
     Returns 'bull', 'bear', or 'neutral' based on 1H RSI value.
     Neutral = no trade zone.
     """
-    if rsi_val > RSI_BULL:
+    if rsi_val > cfg.RSI_BULL:
         return "bull"
-    elif rsi_val < RSI_BEAR:
+    elif rsi_val < cfg.RSI_BEAR:
         return "bear"
     return "neutral"
 
@@ -80,9 +81,9 @@ def momentum(df: pd.DataFrame, lookback: int = 2) -> float:
 
 def momentum_bias(mom: float) -> str:
     """Returns 'bull', 'bear', or 'neutral' based on momentum threshold."""
-    if mom >= MOMENTUM_MIN:
+    if mom >= cfg.MOMENTUM_MIN:
         return "bull"
-    elif mom <= -MOMENTUM_MIN:
+    elif mom <= -cfg.MOMENTUM_MIN:
         return "bear"
     return "neutral"
 

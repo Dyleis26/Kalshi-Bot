@@ -20,7 +20,7 @@ class History:
     def load(self, interval):
         """
         Load candles for an interval.
-        Pulls from Binance if no local file exists, otherwise loads local
+        Pulls from Kraken if no local file exists, otherwise loads local
         and appends any missing candles since last save.
         """
         path = self._path(interval)

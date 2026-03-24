@@ -238,6 +238,10 @@ class PaperTrader:
             while self.running:
                 time.sleep(900)
                 self.monitor.print_status()
+                # Refresh 1H candles from REST — WebSocket only subscribes to 15M
+                fresh_1h = self.history.load("1h")
+                with self._lock:
+                    self.df_1h = fresh_1h
                 if self._is_new_day():
                     self.portfolio.reset_day()
         except KeyboardInterrupt:

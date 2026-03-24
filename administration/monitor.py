@@ -11,7 +11,7 @@ class Monitor:
         self.start_dt = datetime.now(timezone.utc)
 
         # Connection status
-        self.binance_connected = False
+        self.kraken_connected = False
         self.kalshi_connected = False
         self.discord_connected = False
 
@@ -36,8 +36,8 @@ class Monitor:
     # ------------------------------------------------------------------ #
 
     def set_connected(self, service: str, status: bool):
-        if service == "binance":
-            self.binance_connected = status
+        if service == "kraken":
+            self.kraken_connected = status
         elif service == "kalshi":
             self.kalshi_connected = status
         elif service == "discord":
@@ -45,7 +45,7 @@ class Monitor:
         logger.info(f"{service.upper()} connection: {'OK' if status else 'LOST'}")
 
     def all_connected(self) -> bool:
-        return self.binance_connected and self.kalshi_connected
+        return self.kraken_connected and self.kalshi_connected
 
     # ------------------------------------------------------------------ #
     #  Event Tracking                                                      #
@@ -106,7 +106,7 @@ class Monitor:
             "halted":             self.is_halted,
             "halt_reason":        self.halt_reason,
             "connections": {
-                "binance":        self.binance_connected,
+                "kraken":         self.kraken_connected,
                 "kalshi":         self.kalshi_connected,
                 "discord":        self.discord_connected,
             },

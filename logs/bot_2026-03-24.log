@@ -1,0 +1,129 @@
+2026-03-23 20:52:37 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): api.kraken.com:443
+2026-03-23 20:52:38 | DEBUG    | urllib3.connectionpool | https://api.kraken.com:443 "GET /0/public/OHLC?pair=XBTUSD&interval=60&since=1773593557 HTTP/1.1" 200 None
+2026-03-23 20:52:38 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): api.kraken.com:443
+2026-03-23 20:52:38 | DEBUG    | urllib3.connectionpool | https://api.kraken.com:443 "GET /0/public/OHLC?pair=XBTUSD&interval=15&since=1774133558 HTTP/1.1" 200 None
+2026-03-23 21:12:35 | INFO     | discord | Discord webhook ready.
+2026-03-23 21:12:35 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:12:36 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:12:37 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:12:37 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:12:38 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:12:38 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:12:39 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:12:40 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:12:41 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:12:41 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:14:21 | INFO     | discord | Discord webhook ready.
+2026-03-23 21:14:21 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:14:22 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:14:23 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:14:23 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:14:24 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:14:24 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:14:25 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:14:25 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:14:26 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:14:26 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:15:19 | INFO     | discord | Discord webhook ready.
+2026-03-23 21:15:19 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:15:19 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:15:20 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:15:20 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:15:21 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:15:21 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:15:22 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:15:23 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:15:24 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): discord.com:443
+2026-03-23 21:15:24 | DEBUG    | urllib3.connectionpool | https://discord.com:443 "POST /api/webhooks/1485802223526084770/euNgOgzLU636Gh_1q8112qT0hcx0dxyKUUaeQ-t6ttq0aXbjtktUbqd1i8hsP5_Cv19i HTTP/1.1" 204 0
+2026-03-23 21:15:38 | INFO     | main | Starting bot in [backtest] mode
+2026-03-23 21:15:38 | ERROR    | main | Environment setup incomplete: Missing required environment variables: KALSHI_API_KEY, KALSHI_KEY_PATH, DISCORD_WEBHOOK_URL
+2026-03-23 21:16:13 | INFO     | main | Starting bot in [backtest] mode
+2026-03-23 21:16:13 | ERROR    | main | Environment setup incomplete: Missing required environment variables: KALSHI_API_KEY, KALSHI_KEY_PATH, DISCORD_WEBHOOK_URL
+2026-03-23 21:17:13 | INFO     | main | Starting bot in [backtest] mode
+2026-03-23 21:17:13 | INFO     | main | Loading historical data...
+2026-03-23 21:17:13 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): api.kraken.com:443
+2026-03-23 21:17:13 | DEBUG    | urllib3.connectionpool | https://api.kraken.com:443 "GET /0/public/OHLC?pair=XBTUSD&interval=60&since=1773595033 HTTP/1.1" 200 None
+2026-03-23 21:17:13 | DEBUG    | urllib3.connectionpool | Starting new HTTPS connection (1): api.kraken.com:443
+2026-03-23 21:17:13 | DEBUG    | urllib3.connectionpool | https://api.kraken.com:443 "GET /0/public/OHLC?pair=XBTUSD&interval=15&since=1774135033 HTTP/1.1" 200 None
+2026-03-23 21:17:13 | INFO     | main | Running backtest...
+2026-03-23 21:17:13 | INFO     | backtest | Backtest starting — 200 15M candles, 200 1H candles
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=32.91 | MACD=-170.8711 | MOM=+0.0033 | VWAP_diff=+37.7562 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=32.91 | MACD=-170.8711 | MOM=+0.0054 | VWAP_diff=+293.2275 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=32.91 | MACD=-170.8711 | MOM=+0.0023 | VWAP_diff=+181.0528 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=32.91 | MACD=-170.8711 | MOM=-0.0007 | VWAP_diff=+240.4374 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.44 | MACD=-144.1429 | MOM=+0.0013 | VWAP_diff=+266.3751 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.44 | MACD=-144.1429 | MOM=+0.0024 | VWAP_diff=+398.2685 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.44 | MACD=-144.1429 | MOM=+0.0005 | VWAP_diff=+290.3185 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.44 | MACD=-144.1429 | MOM=-0.0016 | VWAP_diff=+280.7200 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.00 | MACD=-116.7873 | MOM=+0.0010 | VWAP_diff=+355.3378 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.00 | MACD=-116.7873 | MOM=-0.0013 | VWAP_diff=+184.6896 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.00 | MACD=-116.7873 | MOM=-0.0012 | VWAP_diff=+269.1135 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.00 | MACD=-116.7873 | MOM=+0.0016 | VWAP_diff=+290.5803 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=31.93 | MACD=-104.6483 | MOM=-0.0014 | VWAP_diff=+168.7912 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=31.93 | MACD=-104.6483 | MOM=-0.0028 | VWAP_diff=+97.6797 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=31.93 | MACD=-104.6483 | MOM=-0.0004 | VWAP_diff=+141.0297 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=31.93 | MACD=-104.6483 | MOM=-0.0002 | VWAP_diff=+78.2965 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=31.86 | MACD=-89.5343 | MOM=-0.0012 | VWAP_diff=+58.0536 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=31.86 | MACD=-89.5343 | MOM=+0.0008 | VWAP_diff=+131.6480 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=31.86 | MACD=-89.5343 | MOM=+0.0010 | VWAP_diff=+124.3115 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=31.86 | MACD=-89.5343 | MOM=-0.0009 | VWAP_diff=+68.7418 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.52 | MACD=-88.1091 | MOM=-0.0007 | VWAP_diff=+72.2665 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.52 | MACD=-88.1091 | MOM=+0.0004 | VWAP_diff=+94.4518 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.52 | MACD=-88.1091 | MOM=-0.0031 | VWAP_diff=-142.9294 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.52 | MACD=-88.1091 | MOM=-0.0038 | VWAP_diff=-169.6282 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=27.15 | MACD=-86.6818 | MOM=+0.0004 | VWAP_diff=-104.4048 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=27.15 | MACD=-86.6818 | MOM=-0.0039 | VWAP_diff=-425.8878 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=27.15 | MACD=-86.6818 | MOM=-0.0032 | VWAP_diff=-310.9498 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=27.15 | MACD=-86.6818 | MOM=+0.0024 | VWAP_diff=-254.6858 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=27.99 | MACD=-76.8086 | MOM=+0.0016 | VWAP_diff=-195.1737 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=27.99 | MACD=-76.8086 | MOM=-0.0023 | VWAP_diff=-408.3622 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=27.99 | MACD=-76.8086 | MOM=-0.0010 | VWAP_diff=-259.8616 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=27.99 | MACD=-76.8086 | MOM=+0.0026 | VWAP_diff=-225.7631 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=25.81 | MACD=-73.9437 | MOM=-0.0008 | VWAP_diff=-313.3061 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=25.81 | MACD=-73.9437 | MOM=-0.0015 | VWAP_diff=-325.6673 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=25.81 | MACD=-73.9437 | MOM=-0.0019 | VWAP_diff=-444.8815 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=25.81 | MACD=-73.9437 | MOM=-0.0009 | VWAP_diff=-384.7724 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=20.99 | MACD=-93.6411 | MOM=+0.0010 | VWAP_diff=-373.2548 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=20.99 | MACD=-93.6411 | MOM=-0.0036 | VWAP_diff=-606.1333 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=20.99 | MACD=-93.6411 | MOM=-0.0038 | VWAP_diff=-609.0363 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=20.99 | MACD=-93.6411 | MOM=-0.0030 | VWAP_diff=-763.3667 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.20 | MACD=-69.0917 | MOM=-0.0014 | VWAP_diff=-655.4191 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.20 | MACD=-69.0917 | MOM=+0.0066 | VWAP_diff=-292.8583 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.20 | MACD=-69.0917 | MOM=+0.0045 | VWAP_diff=-333.6551 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.20 | MACD=-69.0917 | MOM=-0.0000 | VWAP_diff=-291.4685 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.43 | MACD=-43.4468 | MOM=+0.0027 | VWAP_diff=-142.7581 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.43 | MACD=-43.4468 | MOM=+0.0023 | VWAP_diff=-131.0513 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.43 | MACD=-43.4468 | MOM=-0.0025 | VWAP_diff=-311.4791 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.43 | MACD=-43.4468 | MOM=-0.0016 | VWAP_diff=-233.0024 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.66 | MACD=-20.8365 | MOM=+0.0022 | VWAP_diff=-150.0719 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.66 | MACD=-20.8365 | MOM=+0.0018 | VWAP_diff=-103.1069 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.66 | MACD=-20.8365 | MOM=+0.0010 | VWAP_diff=-81.2978 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=35.66 | MACD=-20.8365 | MOM=-0.0017 | VWAP_diff=-214.9018 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=38.84 | MACD=5.4602 | MOM=+0.0009 | VWAP_diff=-17.4356 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=38.84 | MACD=5.4602 | MOM=+0.0027 | VWAP_diff=-25.2902 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=38.84 | MACD=5.4602 | MOM=-0.0014 | VWAP_diff=-115.2892 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=38.84 | MACD=5.4602 | MOM=-0.0011 | VWAP_diff=-95.6101 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=38.74 | MACD=25.0503 | MOM=-0.0002 | VWAP_diff=-123.3578 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=38.74 | MACD=25.0503 | MOM=-0.0015 | VWAP_diff=-199.2974 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=38.74 | MACD=25.0503 | MOM=-0.0011 | VWAP_diff=-196.0045 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=38.74 | MACD=25.0503 | MOM=+0.0015 | VWAP_diff=-97.6273 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=36.29 | MACD=31.1204 | MOM=+0.0015 | VWAP_diff=-89.8388 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=36.29 | MACD=31.1204 | MOM=-0.0000 | VWAP_diff=-98.8296 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=36.29 | MACD=31.1204 | MOM=-0.0022 | VWAP_diff=-238.7879 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=36.29 | MACD=31.1204 | MOM=-0.0019 | VWAP_diff=-222.0261 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.79 | MACD=31.4863 | MOM=+0.0003 | VWAP_diff=-206.5280 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.79 | MACD=31.4863 | MOM=+0.0001 | VWAP_diff=-210.0243 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.79 | MACD=31.4863 | MOM=-0.0032 | VWAP_diff=-420.8907 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=34.79 | MACD=31.4863 | MOM=-0.0014 | VWAP_diff=-295.7571 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.53 | MACD=6.8644 | MOM=-0.0023 | VWAP_diff=-563.6605 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.53 | MACD=6.8644 | MOM=-0.0043 | VWAP_diff=-580.4488 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.53 | MACD=6.8644 | MOM=+0.0013 | VWAP_diff=-468.3047 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.53 | MACD=6.8644 | MOM=-0.0018 | VWAP_diff=-600.4871 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.67 | MACD=-5.1303 | MOM=-0.0010 | VWAP_diff=-434.4630 | => SHORT
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.67 | MACD=-5.1303 | MOM=+0.0019 | VWAP_diff=-464.9081 | => NONE
+2026-03-23 21:17:13 | DEBUG    | bot | SIGNAL | RSI=28.67 | MACD=-5.1303 | MOM=+0.0003 | VWAP_diff=-406.4110 | => NONE
+2026-03-23 21:17:14 | DEBUG    | bot | SIGNAL | RSI=28.67 | MACD=-5.1303 | MOM=-0.0018 | VWAP_diff=-580.1209 | => SHORT
+2026-03-23 21:17:14 | DEBUG    | bot | SIGNAL | RSI=24.81 | MACD=-28.8257 | MOM=-0.0091 | VWAP_diff=-954.9596 | => SHORT
+2026-03-23 21:17:14 | DEBUG    | bot | SIGNAL | RSI=24.81 | MACD=-28.8257 | MOM=-0.0056 | VWAP_diff=-783.0383 | => SHORT
+2026-03-23 21:17:14 | INFO     | backtest | Portfolio halted — stopping backtest early.
+2026-03-23 21:17:14 | INFO     | backtest | Backtest complete — 21 trades, 0 skipped

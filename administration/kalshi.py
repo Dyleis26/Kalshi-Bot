@@ -96,6 +96,34 @@ class KalshiClient:
             log_error("Failed to fetch BTC market", e)
             return None
 
+    def get_market(self, ticker: str) -> dict:
+        """Fetch a single market by ticker (works for open, closed, and settled)."""
+        try:
+            data = self._get(f"/markets/{ticker}")
+            return data.get("market")
+        except Exception as e:
+            log_error(f"Failed to fetch market {ticker}", e)
+            return None
+
+    def get_btc_market_ticker(self) -> str | None:
+        """Return the ticker of the currently active BTC 15M Up/Down market."""
+        m = self.get_btc_market()
+        return m.get("ticker") if m else None
+
+    def get_market_result(self, ticker: str, retries: int = 6, delay: int = 10) -> str | None:
+        """
+        Poll until a market has settled and return 'yes' or 'no'.
+        Waits up to retries * delay seconds (default 60s).
+        Returns None if it never settles in time.
+        """
+        import time
+        for _ in range(retries):
+            m = self.get_market(ticker)
+            if m and m.get("result") in ("yes", "no"):
+                return m["result"]
+            time.sleep(delay)
+        return None
+
     def get_orderbook(self, ticker: str):
         """Fetch the current orderbook for a market ticker."""
         try:

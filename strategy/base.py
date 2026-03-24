@@ -1,6 +1,6 @@
 import pandas as pd
 from strategy.signals import evaluate
-from administration.config import MIN_CONFIDENCE, KELLY_FRACTION, MAX_BET, MIN_BET
+from administration.config import MIN_CONFIDENCE, KELLY_FRACTION, MAX_BET, MIN_BET, FORCE_TRADE
 from administration.logger import log_signal
 
 
@@ -45,10 +45,22 @@ class Strategy:
         bull_count = biases.count("bull")
         bear_count = biases.count("bear")
 
-        if bull_count == MIN_CONFIDENCE:
+        if FORCE_TRADE:
+            # Data collection mode: majority vote, always enter
+            if bull_count > bear_count:
+                direction = LONG
+                reason = f"Force/majority — bull={bull_count} bear={bear_count}"
+            elif bear_count > bull_count:
+                direction = SHORT
+                reason = f"Force/majority — bull={bull_count} bear={bear_count}"
+            else:
+                # Tie: use RSI as tiebreaker (most reliable single signal)
+                direction = LONG if signals["rsi_bias"] == "bull" else SHORT
+                reason = f"Force/tie broken by RSI ({signals['rsi']:.1f})"
+        elif bull_count >= MIN_CONFIDENCE:
             direction = LONG
             reason = "All 4 signals bullish"
-        elif bear_count == MIN_CONFIDENCE:
+        elif bear_count >= MIN_CONFIDENCE:
             direction = SHORT
             reason = "All 4 signals bearish"
         else:

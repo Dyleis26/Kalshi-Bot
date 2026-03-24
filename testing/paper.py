@@ -7,8 +7,9 @@ from administration.portfolio import Portfolio
 from administration.monitor import Monitor
 from administration.discord import Discord
 from administration.config import (
-    STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE
+    STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE
 )
+from administration.kalshi import KalshiClient
 from data.kraken import KrakenFeed
 from data.history import History
 from data.trades import TradeLog
@@ -32,6 +33,7 @@ class PaperTrader:
         self.monitor = Monitor()
         self.discord = Discord(paper=True)
         self.trade_log = TradeLog(mode="paper")
+        self.kalshi = KalshiClient(paper=False)  # live URL for real market settlement data
 
         # Live candle buffers
         self.df_1h: pd.DataFrame = pd.DataFrame()
@@ -43,6 +45,7 @@ class PaperTrader:
         self.trades_this_hour = 0
         self.hour_window_start = time.monotonic()
         self._lock = threading.Lock()
+        self._ready_at = None  # set on start, trades blocked for first 60s
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
@@ -62,6 +65,7 @@ class PaperTrader:
 
         self.discord.bot_started(self.portfolio.total)
         self.running = True
+        self._ready_at = time.monotonic() + 60  # 1-minute warmup before first trade
 
         self.feed.start_streams(
             on_1h=self._on_1h_candle,
@@ -104,7 +108,9 @@ class PaperTrader:
     # ------------------------------------------------------------------ #
 
     def _evaluate(self):
-        if not self.portfolio.can_trade():
+        if time.monotonic() < self._ready_at:
+            return
+        if not FORCE_TRADE and not self.portfolio.can_trade():
             return
         if not self._within_trade_limit():
             return
@@ -151,6 +157,13 @@ class PaperTrader:
             signals=decision["signals"],
         )
 
+        # Grab the Kalshi market ticker that covers the upcoming outcome window
+        kalshi_ticker = self.kalshi.get_btc_market_ticker()
+        if kalshi_ticker:
+            logger.info(f"Outcome market ticker: {kalshi_ticker}")
+        else:
+            logger.warning("Could not fetch Kalshi market ticker — will fall back to Kraken for resolution")
+
         log_trade(direction, self.live_price, total_cost)
         self.monitor.record_order_placed()
         self.trades_this_hour += 1
@@ -167,11 +180,21 @@ class PaperTrader:
         threading.Timer(
             15 * 60,
             self._resolve_trade,
-            args=[direction, contracts, contract_price, price_pct, trade_id]
+            args=[direction, contracts, contract_price, price_pct, trade_id, kalshi_ticker]
         ).start()
 
     def _resolve_trade(self, direction: str, contracts: int,
-                       contract_price: float, price_pct: float, trade_id: str):
+                       contract_price: float, price_pct: float, trade_id: str,
+                       kalshi_ticker: str = None):
+        # --- Determine outcome via Kalshi settlement (ground truth) ---
+        kalshi_result = None
+        if kalshi_ticker:
+            kalshi_result = self.kalshi.get_market_result(kalshi_ticker)
+            if kalshi_result:
+                logger.info(f"Kalshi settled {kalshi_ticker}: {kalshi_result.upper()}")
+            else:
+                logger.warning(f"Kalshi settlement not available for {kalshi_ticker} — falling back to Kraken")
+
         with self._lock:
             if self.df_15m.empty or len(self.df_15m) < 2:
                 return
@@ -179,7 +202,13 @@ class PaperTrader:
             went_up = last["close"] > last["open"]
             btc_candle = last.to_dict()
 
-        win = (direction == LONG and went_up) or (direction == SHORT and not went_up)
+        if kalshi_result:
+            # Ground truth: use Kalshi's actual settlement
+            kalshi_side = "yes" if direction == LONG else "no"
+            win = (kalshi_result == kalshi_side)
+        else:
+            # Fallback: estimate from Kraken candle direction
+            win = (direction == LONG and went_up) or (direction == SHORT and not went_up)
 
         actual_cost = contracts * contract_price
         fee = KALSHI_MAKER_FEE * actual_cost * (1 - contract_price)

@@ -28,11 +28,12 @@ RSI_BEAR = 45         # 1H RSI below this = bearish bias
 RSI_PERIOD = 14
 MOMENTUM_MIN = 0.0005 # Minimum 0.05% price move over last 2 candles
 MIN_CONFIDENCE = 4    # All 4 signals must agree to enter
+FORCE_TRADE = True    # Data collection mode: majority vote, trades every window
 
 # --- Execution ---
 LIMIT_ORDER_OFFSET = 0.02   # Place limit 2 cents below ask
 ORDER_TIMEOUT_SECS = 120    # Cancel unfilled orders after 2 minutes
-MAX_TRADES_PER_HOUR = 6
+MAX_TRADES_PER_HOUR = 4     # 4 per hour = every 15M window (data collection)
 
 # --- Portfolio ---
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.00"))
@@ -42,12 +43,12 @@ PROFIT_TO_CASH = 0.50       # 50% of each profit goes to cash
 PROFIT_TO_CAPITAL = 0.50    # 50% of each profit stays in capital
 
 # --- Risk ---
-DAILY_LOSS_LIMIT = 0.50     # Stop trading after 50% capital loss in a day
+DAILY_LOSS_LIMIT = 1.00     # Data collection: disabled (100% loss required to halt)
 KELLY_FRACTION = 0.20       # Use 20% of full Kelly
 MAX_BET = 50.00             # Hard cap per trade in dollars
 MIN_BET = 10.00             # Minimum trade size in dollars
-MAX_LOSING_STREAK = 5       # Reduce bet size 50% after this many losses
-LOSING_STREAK_REDUCTION = 0.50  # Reduce size by 50% on losing streak
+MAX_LOSING_STREAK = 999     # Data collection: disabled
+LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 
 # --- Kalshi Fees ---
 KALSHI_MAKER_FEE = 0.0175   # Maker fee coefficient (limit orders)

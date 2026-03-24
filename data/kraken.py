@@ -202,7 +202,7 @@ class KrakenFeed:
         df = pd.DataFrame(raw, columns=[
             "time", "open", "high", "low", "close", "vwap", "volume", "count"
         ])
-        df["time"] = pd.to_datetime(df["time"].astype(int), unit="s")
+        df.loc[:, "time"] = pd.to_datetime(df["time"].astype(int), unit="s")
         for col in ["open", "high", "low", "close", "volume"]:
             df.loc[:, col] = df[col].astype(float)
         return df[["time", "open", "high", "low", "close", "volume"]].reset_index(drop=True)

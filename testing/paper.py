@@ -163,6 +163,7 @@ class PaperTrader:
             possible_payout=payout,
             btc_price=live_price,
             signals=decision["signals"],
+            asset=asset,
         )
 
         # Capture Kalshi market ticker for ground-truth settlement

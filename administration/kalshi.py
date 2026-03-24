@@ -112,11 +112,6 @@ class KalshiClient:
             log_error(f"Failed to fetch market {ticker}", e)
             return None
 
-    def get_btc_market_ticker(self) -> str | None:
-        """Return the ticker of the currently active BTC 15M Up/Down market."""
-        m = self.get_btc_market()
-        return m.get("ticker") if m else None
-
     def get_market_result(self, ticker: str, retries: int = 6, delay: int = 10) -> str | None:
         """
         Poll until a market has settled and return 'yes' or 'no'.

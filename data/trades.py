@@ -11,11 +11,12 @@ COLUMNS = [
     # Identity
     "trade_id",           # Unique ID for this trade
     "mode",               # 'paper' or 'live'
+    "asset",              # 'BTC', 'ETH', 'SOL', 'XRP', 'DOGE'
 
     # Entry
     "entry_time",         # UTC timestamp when trade was placed
     "direction",          # 'long' (UP) or 'short' (DOWN)
-    "btc_price_entry",    # BTC price at moment of entry
+    "btc_price_entry",    # Asset price at moment of entry
 
     # Contract details
     "contracts",          # Number of contracts bought
@@ -70,7 +71,7 @@ class TradeLog:
 
     def open_trade(self, direction: str, contracts: int, contract_price_pct: float,
                    cost: float, possible_payout: float, btc_price: float,
-                   signals: dict) -> str:
+                   signals: dict, asset: str = "BTC") -> str:
         """
         Record a trade entry. Returns a unique trade_id to reference at close.
 
@@ -90,6 +91,7 @@ class TradeLog:
         row.update({
             "trade_id":           trade_id,
             "mode":               self.mode,
+            "asset":              asset,
             "entry_time":         entry_time,
             "direction":          direction,
             "btc_price_entry":    round(btc_price, 2),

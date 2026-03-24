@@ -22,7 +22,8 @@ def rsi(df: pd.DataFrame, period: int = RSI_PERIOD) -> float:
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi_series = 100 - (100 / (1 + rs))
-    return round(float(rsi_series.iloc[-1]), 4)
+    val = float(rsi_series.iloc[-1])
+    return round(val if not np.isnan(val) else 50.0, 4)  # 50 = neutral on insufficient data
 
 
 def rsi_bias(rsi_val: float) -> str:

@@ -54,8 +54,11 @@ class Strategy:
                 direction = SHORT
                 reason = f"Force/majority — bull={bull_count} bear={bear_count}"
             else:
-                # Tie: use RSI as tiebreaker (most reliable single signal)
-                direction = LONG if signals["rsi_bias"] == "bull" else SHORT
+                # Tie: use RSI as tiebreaker; neutral RSI defaults to LONG
+                if signals["rsi_bias"] == "bear":
+                    direction = SHORT
+                else:
+                    direction = LONG
                 reason = f"Force/tie broken by RSI ({signals['rsi']:.1f})"
         elif bull_count >= MIN_CONFIDENCE:
             direction = LONG

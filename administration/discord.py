@@ -73,45 +73,69 @@ class Discord:
             ])
         )
 
-    def buy(self, direction: str, contracts: int, price_pct: float,
-            cost: float, payout: float, portfolio_total: float):
+    def buy(self, direction: str, contracts: int, contracts_filled: int, price_pct: float,
+            cost: float, payout: float, portfolio_total: float, asset: str = "BTC",
+            session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
         side = "UP" if direction == "long" else "DOWN"
+        pnl_sign = "+" if session_pnl >= 0 else ""
+        fill_str = (f"{contracts_filled}/{contracts} filled"
+                    if contracts_filled != contracts
+                    else f"{contracts_filled} filled")
         self._send(
-            title=f"🚀 BUY: BTC {side}",
+            title=f"🚀 BUY: {asset} {side}",
             color=BLUE,
             description="\n".join([
-                f"**Contracts:** {contracts} @ {price_pct:.0f}%",
+                f"**Contracts:** {fill_str} @ {price_pct:.0f}%",
                 f"**Cost:** ${cost:.2f}",
                 f"**Payout:** ${payout:.2f}",
                 f"**Portfolio:** ${portfolio_total:.2f}",
+                "",
+                f"**Record:** {session_wins}W - {session_losses}L",
+                f"**Total P&L:** {pnl_sign}${session_pnl:.2f}",
             ])
         )
 
-    def sell_win(self, direction: str, contracts: int, price_pct: float,
-                 pnl: float, portfolio_total: float):
+    def sell_win(self, direction: str, contracts: int, contracts_filled: int,
+                 price_pct: float, pnl: float, portfolio_total: float, asset: str = "BTC",
+                 session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
         side = "UP" if direction == "long" else "DOWN"
+        pnl_sign = "+" if session_pnl >= 0 else ""
+        fill_str = (f"{contracts_filled}/{contracts} filled"
+                    if contracts_filled != contracts
+                    else f"{contracts_filled} filled")
         self._send(
-            title=f"✅ SELL: BTC {side}",
+            title=f"✅ SELL: {asset} {side}",
             color=GREEN,
             description="\n".join([
-                f"**Contracts:** {contracts} @ {price_pct:.0f}%",
+                f"**Contracts:** {fill_str} @ {price_pct:.0f}%",
                 f"**Result:** Win",
                 f"**P&L:** +${pnl:.2f}",
                 f"**Portfolio:** ${portfolio_total:.2f}",
+                "",
+                f"**Record:** {session_wins}W - {session_losses}L",
+                f"**Total P&L:** {pnl_sign}${session_pnl:.2f}",
             ])
         )
 
-    def sell_loss(self, direction: str, contracts: int, price_pct: float,
-                  pnl: float, portfolio_total: float):
+    def sell_loss(self, direction: str, contracts: int, contracts_filled: int,
+                  price_pct: float, pnl: float, portfolio_total: float, asset: str = "BTC",
+                  session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
         side = "UP" if direction == "long" else "DOWN"
+        pnl_sign = "+" if session_pnl >= 0 else ""
+        fill_str = (f"{contracts_filled}/{contracts} filled"
+                    if contracts_filled != contracts
+                    else f"{contracts_filled} filled")
         self._send(
-            title=f"❌ SELL: BTC {side}",
+            title=f"❌ SELL: {asset} {side}",
             color=RED,
             description="\n".join([
-                f"**Contracts:** {contracts} @ {price_pct:.0f}%",
+                f"**Contracts:** {fill_str} @ {price_pct:.0f}%",
                 f"**Result:** Loss",
                 f"**P&L:** -${abs(pnl):.2f}",
                 f"**Portfolio:** ${portfolio_total:.2f}",
+                "",
+                f"**Record:** {session_wins}W - {session_losses}L",
+                f"**Total P&L:** {pnl_sign}${session_pnl:.2f}",
             ])
         )
 

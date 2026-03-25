@@ -93,11 +93,12 @@ def momentum_bias(mom: float) -> str:
 #  VWAP                                                                #
 # ------------------------------------------------------------------ #
 
-def vwap(df: pd.DataFrame) -> float:
+def vwap(df: pd.DataFrame, window: int = 96) -> float:
     """
-    Calculate intraday VWAP using typical price × volume.
-    Returns the latest VWAP value.
+    Calculate rolling VWAP using the last `window` candles (default 96 = 24h of 15M bars).
+    Resets daily so price isn't always above a multi-day cumulative average.
     """
+    df = df.tail(window)
     typical = (df["high"] + df["low"] + df["close"]) / 3
     cumulative_vol = df["volume"].cumsum()
     cumulative_tp_vol = (typical * df["volume"]).cumsum()

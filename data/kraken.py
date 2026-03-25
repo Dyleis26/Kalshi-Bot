@@ -123,6 +123,8 @@ class KrakenFeed:
         ]
         for sub in subscriptions:
             ws.send(json.dumps(sub))
+        # Backfill any candles missed during a disconnect
+        self._backfill_missed_candles()
 
     def _on_message(self, ws, message):
         try:
@@ -142,6 +144,45 @@ class KrakenFeed:
 
     def _on_close(self, ws, code, msg):
         logger.warning(f"Kraken WebSocket closed: {code} {msg}")
+
+    def _backfill_missed_candles(self):
+        """
+        On reconnect, fetch the last 5 closed 15M candles via REST for each asset
+        and fire _on_15m for any candle newer than what we last saw on the WS.
+        Prevents missed signals when the WS drops for up to ~75 minutes.
+        """
+        if not self._on_15m:
+            return
+        from datetime import datetime as _dt
+        now_utc = pd.Timestamp(_dt.utcnow())  # tz-naive UTC, matches Kraken REST candle times
+        for asset in ASSETS:
+            try:
+                df = self.get_candles("15m", asset=asset, limit=5)
+                if df.empty:
+                    continue
+                ws_symbol = ASSETS[asset]["kraken_ws"]
+                key = (ws_symbol, 15)
+                last_seen = self._last_ts.get(key)  # interval_begin string from WS
+                for _, row in df.iterrows():
+                    # Skip candles that haven't closed yet (current open candle from REST)
+                    candle_close_time = pd.Timestamp(row["time"]) + pd.Timedelta(minutes=15)
+                    if candle_close_time > now_utc:
+                        continue
+                    # Convert REST timestamp to comparable string (ISO8601 UTC)
+                    row_ts = pd.Timestamp(row["time"], tz="UTC").isoformat()
+                    if last_seen is None or row_ts > last_seen:
+                        candle = {
+                            "time":   row["time"],
+                            "open":   row["open"],
+                            "high":   row["high"],
+                            "low":    row["low"],
+                            "close":  row["close"],
+                            "volume": row["volume"],
+                        }
+                        logger.info(f"Backfill: firing missed candle for {asset} at {row['time']}")
+                        self._on_15m(asset, candle)
+            except Exception as e:
+                logger.warning(f"Backfill failed for {asset}: {e}")
 
     def _handle_ohlc(self, msg):
         """
@@ -201,7 +242,7 @@ class KrakenFeed:
         df = pd.DataFrame(raw, columns=[
             "time", "open", "high", "low", "close", "vwap", "volume", "count"
         ])
-        df.loc[:, "time"] = pd.to_datetime(df["time"].astype(int), unit="s")
+        df = df.assign(time=pd.to_datetime(df["time"].astype(int), unit="s"))
         for col in ["open", "high", "low", "close", "volume"]:
             df.loc[:, col] = df[col].astype(float)
         return df[["time", "open", "high", "low", "close", "volume"]].reset_index(drop=True)

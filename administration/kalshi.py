@@ -52,25 +52,22 @@ class KalshiClient:
         }
 
     def _get(self, path: str, params: dict = None):
-        headers = self._sign("GET", path)
         def call():
-            r = self.session.get(self.base + path, headers=headers, params=params, timeout=10)
+            r = self.session.get(self.base + path, headers=self._sign("GET", path), params=params, timeout=10)
             r.raise_for_status()
             return r.json()
         return rate_limited_call("kalshi", call)
 
     def _post(self, path: str, body: dict):
-        headers = self._sign("POST", path)
         def call():
-            r = self.session.post(self.base + path, headers=headers, json=body, timeout=10)
+            r = self.session.post(self.base + path, headers=self._sign("POST", path), json=body, timeout=10)
             r.raise_for_status()
             return r.json()
         return rate_limited_call("kalshi", call)
 
     def _delete(self, path: str):
-        headers = self._sign("DELETE", path)
         def call():
-            r = self.session.delete(self.base + path, headers=headers, timeout=10)
+            r = self.session.delete(self.base + path, headers=self._sign("DELETE", path), timeout=10)
             r.raise_for_status()
             return r.json()
         return rate_limited_call("kalshi", call)
@@ -90,11 +87,11 @@ class KalshiClient:
         try:
             data = self._get("/markets", params={"status": "open", "series_ticker": series})
             markets = data.get("markets", [])
-            for m in markets:
-                title = m.get("title", "").lower()
-                if "15" in title and ("up" in title or "down" in title):
-                    return m
-            return markets[0] if markets else None
+            # The 15M directional series has exactly one open market at a time;
+            # title is e.g. "BTC price up in next 15 mins?" — just return the first open market.
+            if markets:
+                return markets[0]
+            return None
         except Exception as e:
             log_error(f"Failed to fetch {asset} market", e)
             return None
@@ -135,14 +132,17 @@ class KalshiClient:
             return None
 
     def get_market_price(self, ticker: str) -> float:
-        """Return the best YES ask price (0.0 to 1.0) for a market."""
+        """
+        Return the best YES ask price (0.0 to 1.0) for a market.
+        Returns 1.0 (outside filter range) when no asks exist so the trade is skipped.
+        """
         book = self.get_orderbook(ticker)
         if not book:
             return 0.50
         asks = book.get("orderbook", {}).get("asks", [])
         if asks:
             return round(asks[0][0] / 100, 4)
-        return 0.50
+        return 1.0  # No asks = no liquidity; 1.0 forces the contract price filter to skip
 
     # ------------------------------------------------------------------ #
     #  Orders                                                              #

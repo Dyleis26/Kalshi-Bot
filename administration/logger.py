@@ -1,13 +1,13 @@
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 LOGS_DIR = os.path.join(os.path.dirname(__file__), "..", "logs")
 
 
 def _setup():
     os.makedirs(LOGS_DIR, exist_ok=True)
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     fmt = logging.Formatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",

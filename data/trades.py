@@ -1,5 +1,6 @@
 import os
 import uuid
+import threading
 import pandas as pd
 from datetime import datetime, timezone
 
@@ -19,7 +20,8 @@ COLUMNS = [
     "btc_price_entry",    # Asset price at moment of entry
 
     # Contract details
-    "contracts",          # Number of contracts bought
+    "contracts",          # Number of contracts requested
+    "contracts_filled",   # Number of contracts actually filled (may be less than requested on live)
     "contract_price_pct", # Contract price as % (e.g. 50.0)
     "cost",               # Total dollar cost including entry fee
     "possible_payout",    # Max payout if win
@@ -64,12 +66,14 @@ class TradeLog:
     def __init__(self, mode: str = "paper"):
         os.makedirs(STORAGE_DIR, exist_ok=True)
         self.mode = mode
+        self._lock = threading.Lock()  # Serialize all CSV reads/writes across threads
 
     # ------------------------------------------------------------------ #
     #  Public                                                              #
     # ------------------------------------------------------------------ #
 
-    def open_trade(self, direction: str, contracts: int, contract_price_pct: float,
+    def open_trade(self, direction: str, contracts: int, contracts_filled: int,
+                   contract_price_pct: float,
                    cost: float, possible_payout: float, btc_price: float,
                    signals: dict, asset: str = "BTC") -> str:
         """
@@ -77,7 +81,8 @@ class TradeLog:
 
         Args:
             direction:           'long' or 'short'
-            contracts:           number of contracts
+            contracts:           number of contracts requested
+            contracts_filled:    number of contracts actually filled
             contract_price_pct:  price as percentage (e.g. 50.0)
             cost:                total cost including fees
             possible_payout:     max payout if win
@@ -96,6 +101,7 @@ class TradeLog:
             "direction":          direction,
             "btc_price_entry":    round(btc_price, 2),
             "contracts":          contracts,
+            "contracts_filled":   contracts_filled,
             "contract_price_pct": contract_price_pct,
             "cost":               cost,
             "possible_payout":    possible_payout,
@@ -126,19 +132,7 @@ class TradeLog:
             btc_candle:  the resolved 15M candle dict (open, high, low, close, volume)
             portfolio:   portfolio summary dict after trade
         """
-        df = self._load()
-        if df.empty:
-            return
-
-        idx = df.index[df["trade_id"] == trade_id]
-        if idx.empty:
-            return
-        i = idx[0]
-
-        entry_time = pd.to_datetime(df.at[i, "entry_time"])
         exit_time = datetime.now(timezone.utc)
-        duration = round((exit_time - entry_time.replace(tzinfo=timezone.utc)).total_seconds())
-
         window_open  = btc_candle.get("open", 0)
         window_close = btc_candle.get("close", 0)
         move_pct = round((window_close - window_open) / window_open, 6) if window_open else 0
@@ -152,7 +146,7 @@ class TradeLog:
             "window_move_pct":  move_pct,
             "window_direction": "up" if move_pct >= 0 else "down",
             "exit_time":        exit_time.isoformat(),
-            "duration_secs":    duration,
+            "duration_secs":    None,  # computed below under lock
             "result":           result,
             "pnl":              round(pnl, 4),
             "fee_paid":         round(fee_paid, 4),
@@ -160,10 +154,20 @@ class TradeLog:
             "cash_after":       portfolio.get("cash", 0),
             "total_after":      portfolio.get("total", 0),
         }
-        for col, val in updates.items():
-            df.loc[i, col] = val
 
-        df.to_csv(TRADES_FILE, index=False)
+        with self._lock:
+            df = self._load()
+            if df.empty:
+                return
+            idx = df.index[df["trade_id"] == trade_id]
+            if idx.empty:
+                return
+            i = idx[0]
+            entry_time = pd.to_datetime(df.at[i, "entry_time"], utc=True)
+            updates["duration_secs"] = round((exit_time - entry_time).total_seconds())
+            for col, val in updates.items():
+                df.loc[i, col] = val
+            df.to_csv(TRADES_FILE, index=False)
 
     def load(self) -> pd.DataFrame:
         """Load the full trade history as a DataFrame."""
@@ -196,15 +200,23 @@ class TradeLog:
     # ------------------------------------------------------------------ #
 
     def _append_row(self, row: dict):
-        df = self._load()
-        new_row = pd.DataFrame([{col: row.get(col) for col in COLUMNS}])
-        if df.empty:
-            df = new_row
-        else:
-            df = pd.concat([df, new_row], ignore_index=True)
-        df.to_csv(TRADES_FILE, index=False)
+        with self._lock:
+            file_exists = os.path.exists(TRADES_FILE)
+            pd.DataFrame([{col: row.get(col) for col in COLUMNS}]).to_csv(
+                TRADES_FILE, mode="a", header=not file_exists, index=False
+            )
 
     def _load(self) -> pd.DataFrame:
         if not os.path.exists(TRADES_FILE):
             return pd.DataFrame(columns=COLUMNS)
-        return pd.read_csv(TRADES_FILE)
+        df = pd.read_csv(TRADES_FILE)
+        # Prevent string columns from being inferred as float64 when all values are null,
+        # which would cause FutureWarning (soon an error) when close_trade writes strings back.
+        str_cols = [
+            "trade_id", "mode", "asset", "direction", "entry_time", "exit_time",
+            "result", "window_direction", "rsi_bias", "macd_bias", "momentum_bias", "vwap_bias",
+        ]
+        for col in str_cols:
+            if col in df.columns:
+                df.loc[:, col] = df[col].astype(object)
+        return df

@@ -21,6 +21,7 @@ def run_paper():
         trader.start()
     except Exception as e:
         log_error("Paper trader crashed", e)
+        trader.stop("Crash")
         kill()
         raise
 

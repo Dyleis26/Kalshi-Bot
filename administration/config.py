@@ -16,11 +16,11 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 # --- Assets ---
 ASSETS = {
-    "BTC":  {"kraken_rest": "XBTUSD",  "kraken_ws": "BTC/USD",  "kalshi_series": "KXBTC"},
-    "ETH":  {"kraken_rest": "ETHUSD",  "kraken_ws": "ETH/USD",  "kalshi_series": "KXETH"},
-    "SOL":  {"kraken_rest": "SOLUSD",  "kraken_ws": "SOL/USD",  "kalshi_series": "KXSOL"},
-    "XRP":  {"kraken_rest": "XRPUSD",  "kraken_ws": "XRP/USD",  "kalshi_series": "KXXRP"},
-    "DOGE": {"kraken_rest": "XDGUSD",  "kraken_ws": "DOGE/USD", "kalshi_series": "KXDOGE"},
+    "BTC":  {"kraken_rest": "XBTUSD",  "kraken_ws": "BTC/USD",  "kalshi_series": "KXBTC15M"},
+    "ETH":  {"kraken_rest": "ETHUSD",  "kraken_ws": "ETH/USD",  "kalshi_series": "KXETH15M"},
+    "SOL":  {"kraken_rest": "SOLUSD",  "kraken_ws": "SOL/USD",  "kalshi_series": "KXSOL15M"},
+    "XRP":  {"kraken_rest": "XRPUSD",  "kraken_ws": "XRP/USD",  "kalshi_series": "KXXRP15M"},
+    "DOGE": {"kraken_rest": "XDGUSD",  "kraken_ws": "DOGE/USD", "kalshi_series": "KXDOGE15M"},
 }
 NUM_SLOTS = len(ASSETS)  # 5 — one capital slot per asset
 
@@ -59,6 +59,10 @@ MAX_BET = 50.00             # Hard cap per trade in dollars
 MIN_BET = 10.00             # Minimum trade size in dollars
 MAX_LOSING_STREAK = 999     # Data collection: disabled
 LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
+
+# --- Kalshi Contract Price Filter ---
+CONTRACT_PRICE_MIN = 0.40   # Don't buy if contract is cheaper than 40¢ (too unlikely)
+CONTRACT_PRICE_MAX = 0.60   # Don't buy if contract is more expensive than 60¢ (too consensus)
 
 # --- Kalshi Fees ---
 KALSHI_MAKER_FEE = 0.0175   # Maker fee coefficient (limit orders)

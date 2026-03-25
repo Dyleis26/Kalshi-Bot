@@ -39,7 +39,7 @@ class Strategy:
             signals["rsi_bias"],
             signals["macd_bias"],
             signals["momentum_bias"],
-            signals["vwap_bias"],
+            signals["momentum_bias"],  # Double-weight momentum — fastest signal, replaces structural VWAP vote
         ]
 
         bull_count = biases.count("bull")
@@ -54,12 +54,16 @@ class Strategy:
                 direction = SHORT
                 reason = f"Force/majority — bull={bull_count} bear={bear_count}"
             else:
-                # Tie: use RSI as tiebreaker; neutral RSI defaults to LONG
-                if signals["rsi_bias"] == "bear":
+                # Tie: use momentum as tiebreaker (most reactive), fall back to RSI
+                if signals["momentum_bias"] == "bear":
+                    direction = SHORT
+                elif signals["momentum_bias"] == "bull":
+                    direction = LONG
+                elif signals["rsi_bias"] == "bear":
                     direction = SHORT
                 else:
                     direction = LONG
-                reason = f"Force/tie broken by RSI ({signals['rsi']:.1f})"
+                reason = f"Force/tie — mom={signals['momentum_bias']} rsi={signals['rsi']:.1f}"
         elif bull_count >= MIN_CONFIDENCE:
             direction = LONG
             reason = "All 4 signals bullish"

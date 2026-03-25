@@ -9,8 +9,7 @@ _killed = threading.Event()
 
 # Rate limit tracker: max requests per window
 _rate_limits = {
-    "binance": {"max": 1200, "window": 60, "calls": deque()},
-    "kalshi":  {"max": 60,   "window": 60, "calls": deque()},
+    "kalshi": {"max": 60, "window": 60, "calls": deque()},
 }
 _rate_lock = threading.Lock()
 

@@ -53,7 +53,7 @@ class Portfolio:
         Reset losing streak.
         """
         to_cash = round(profit * PROFIT_TO_CASH, 2)
-        to_capital = round(profit * PROFIT_TO_CAPITAL, 2)
+        to_capital = round(profit - to_cash, 2)  # Avoid rounding drift from independent splits
 
         self.cash += to_cash
         self.capital += to_capital
@@ -116,6 +116,6 @@ class Portfolio:
     # ------------------------------------------------------------------ #
 
     def _check_halt(self):
-        """Halt trading if daily loss exceeds 50% of starting capital."""
-        if abs(self.daily_pnl) >= self.daily_loss_limit:
+        """Halt trading if daily loss exceeds the daily loss limit."""
+        if self.daily_pnl <= -self.daily_loss_limit:
             self.is_halted = True

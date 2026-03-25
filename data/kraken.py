@@ -203,7 +203,8 @@ class KrakenFeed:
 
         key = (ws_symbol, interval)
 
-        if key not in self._last_ts:
+        if key not in self._last_ts or key not in self._last_data:
+            # First live message for this key (or backfill set _last_ts without _last_data)
             self._last_ts[key]   = candle_ts
             self._last_data[key] = data
             return

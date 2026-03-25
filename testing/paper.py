@@ -387,10 +387,15 @@ class PaperTrader:
 
     def _heartbeat(self):
         try:
+            elapsed = 0
             while self.running:
-                time.sleep(900)
+                time.sleep(10)         # Short sleep so SIGTERM exits within 10s
+                elapsed += 10
+                if elapsed < 900:
+                    continue
+                elapsed = 0
                 self.monitor.print_status()
-                # Refresh 1H candles from REST at most once per hour (4 heartbeat cycles)
+                # Refresh 1H candles from REST at most once per hour
                 now = time.monotonic()
                 if now - self._last_1h_refresh >= 3600:
                     for asset, state in self.assets.items():

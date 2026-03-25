@@ -72,6 +72,12 @@ class TradeLog:
     #  Public                                                              #
     # ------------------------------------------------------------------ #
 
+    def reset(self):
+        """Delete the trades CSV so every bot session starts with a clean slate."""
+        with self._lock:
+            if os.path.exists(TRADES_FILE):
+                os.remove(TRADES_FILE)
+
     def open_trade(self, direction: str, contracts: int, contracts_filled: int,
                    contract_price_pct: float,
                    cost: float, possible_payout: float, btc_price: float,

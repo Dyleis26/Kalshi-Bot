@@ -74,15 +74,15 @@ class PaperTrader:
         logger.info("Paper trader starting (5 assets)...")
         self.discord.start()
 
+        # Fresh start — wipe trades from any previous session
+        self.trade_log.reset()
+
         # Load historical candles for all assets
         for asset, state in self.assets.items():
             logger.info(f"Loading history for {asset}...")
             data = state["history"].load_all()
             state["df_1h"]  = data["1h"]
             state["df_15m"] = data["15m"]
-
-        # Recover any orphaned trades from previous sessions
-        self._recover_orphaned_trades()
 
         # Cache Kalshi market tickers for all assets
         for asset in ASSETS:

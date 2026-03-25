@@ -73,10 +73,12 @@ class TradeLog:
     # ------------------------------------------------------------------ #
 
     def reset(self):
-        """Delete the trades CSV so every bot session starts with a clean slate."""
+        """Archive the current trades CSV and start a clean slate for the new session."""
         with self._lock:
             if os.path.exists(TRADES_FILE):
-                os.remove(TRADES_FILE)
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                archive = os.path.join(STORAGE_DIR, f"trades_{ts}.csv")
+                os.rename(TRADES_FILE, archive)
 
     def open_trade(self, direction: str, contracts: int, contracts_filled: int,
                    contract_price_pct: float,

@@ -56,10 +56,12 @@ def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> f
 
 
 def macd_bias(histogram: float) -> str:
-    """Returns 'bull', 'bear' based on MACD histogram direction."""
-    if histogram > 0:
+    """Returns 'bull', 'bear', or 'neutral' based on MACD histogram.
+    MACD_MIN deadband filters noise; set to 0 to disable (default).
+    """
+    if histogram > cfg.MACD_MIN:
         return "bull"
-    elif histogram < 0:
+    elif histogram < -cfg.MACD_MIN:
         return "bear"
     return "neutral"
 
@@ -68,9 +70,9 @@ def macd_bias(histogram: float) -> str:
 #  Momentum                                                            #
 # ------------------------------------------------------------------ #
 
-def momentum(df: pd.DataFrame, lookback: int = 2) -> float:
+def momentum(df: pd.DataFrame, lookback: int = cfg.MOMENTUM_LOOKBACK) -> float:
     """
-    Price % change over the last N 15M candles.
+    Price % change over the last N 15M candles (default: MOMENTUM_LOOKBACK from config).
     Returns positive for upward momentum, negative for downward.
     """
     if len(df) < lookback + 1:

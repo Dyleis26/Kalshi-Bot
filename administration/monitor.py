@@ -1,4 +1,5 @@
 import time
+import threading
 from datetime import datetime, timezone
 from administration.logger import get as get_logger
 
@@ -7,6 +8,7 @@ logger = get_logger("monitor")
 
 class Monitor:
     def __init__(self):
+        self._lock = threading.Lock()
         self.start_time = time.monotonic()
         self.start_dt = datetime.now(timezone.utc)
 
@@ -36,12 +38,13 @@ class Monitor:
     # ------------------------------------------------------------------ #
 
     def set_connected(self, service: str, status: bool):
-        if service == "kraken":
-            self.kraken_connected = status
-        elif service == "kalshi":
-            self.kalshi_connected = status
-        elif service == "discord":
-            self.discord_connected = status
+        with self._lock:
+            if service == "kraken":
+                self.kraken_connected = status
+            elif service == "kalshi":
+                self.kalshi_connected = status
+            elif service == "discord":
+                self.discord_connected = status
         logger.info(f"{service.upper()} connection: {'OK' if status else 'LOST'}")
 
     def all_connected(self) -> bool:
@@ -52,37 +55,43 @@ class Monitor:
     # ------------------------------------------------------------------ #
 
     def record_signal(self, direction: str, signals: dict):
-        self.signals_evaluated += 1
-        self.last_signal = {
-            "time": datetime.now(timezone.utc).isoformat(),
-            "direction": direction,
-            "signals": signals,
-        }
-        if direction != "none":
-            self.signals_fired += 1
+        with self._lock:
+            self.signals_evaluated += 1
+            self.last_signal = {
+                "time": datetime.now(timezone.utc).isoformat(),
+                "direction": direction,
+                "signals": signals,
+            }
+            if direction != "none":
+                self.signals_fired += 1
 
     def record_order_placed(self):
-        self.orders_placed += 1
-        self.last_trade_time = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            self.orders_placed += 1
+            self.last_trade_time = datetime.now(timezone.utc).isoformat()
 
     def record_order_cancelled(self):
-        self.orders_cancelled += 1
+        with self._lock:
+            self.orders_cancelled += 1
 
     def record_trade_result(self, result: str):
-        self.trades_today += 1
-        if result == "win":
-            self.wins_today += 1
-        else:
-            self.losses_today += 1
+        with self._lock:
+            self.trades_today += 1
+            if result == "win":
+                self.wins_today += 1
+            else:
+                self.losses_today += 1
 
     def set_halt(self, halted: bool, reason: str = None):
-        self.is_halted = halted
-        self.halt_reason = reason if halted else None
+        with self._lock:
+            self.is_halted = halted
+            self.halt_reason = reason if halted else None
         if halted:
             logger.warning(f"Bot halted: {reason}")
 
     def update_positions(self, positions: list):
-        self.open_positions = positions
+        with self._lock:
+            self.open_positions = positions
 
     # ------------------------------------------------------------------ #
     #  Summary                                                             #

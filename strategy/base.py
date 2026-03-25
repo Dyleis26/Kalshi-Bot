@@ -40,6 +40,7 @@ class Strategy:
             signals["macd_bias"],
             signals["momentum_bias"],
             signals["momentum_bias"],  # Double-weight momentum — fastest signal, replaces structural VWAP vote
+            # Note: vwap_bias is computed and logged for analysis but not voted on
         ]
 
         bull_count = biases.count("bull")
@@ -93,7 +94,7 @@ class Strategy:
     #  Position Sizing                                                     #
     # ------------------------------------------------------------------ #
 
-    def size(self, capital: float = None, contract_price: float = None, size_multiplier: float = 1.0) -> float:
+    def size(self) -> float:
         """
         Flat $10 per trade during testing.
         Kelly sizing can be enabled later once real win rate is established.

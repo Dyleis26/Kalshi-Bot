@@ -55,7 +55,7 @@ class KrakenFeed:
             if data.get("error"):
                 logger.error(f"Kraken REST error ({asset}): {data['error']}")
                 return pd.DataFrame()
-            pair_key = list(data["result"].keys())[0]
+            pair_key = next(k for k in data["result"] if k != "last")
             raw = data["result"][pair_key]
             return self._to_dataframe(raw)
         except Exception as e:
@@ -181,6 +181,9 @@ class KrakenFeed:
                         }
                         logger.info(f"Backfill: firing missed candle for {asset} at {row['time']}")
                         self._on_15m(asset, candle)
+                        # Update seen timestamp so repeated reconnects don't re-fire
+                        self._last_ts[key] = row_ts
+                        last_seen = row_ts
             except Exception as e:
                 logger.warning(f"Backfill failed for {asset}: {e}")
 

@@ -33,10 +33,13 @@ INTERVALS = {
 CANDLE_LIMIT = 200    # Historical candles to load on startup
 
 # --- Strategy Thresholds ---
-RSI_BULL = 55         # 1H RSI above this = bullish bias
-RSI_BEAR = 45         # 1H RSI below this = bearish bias
+RSI_BULL = 53         # 1H RSI above this = bullish bias (tighter neutral zone)
+RSI_BEAR = 47         # 1H RSI below this = bearish bias
 RSI_PERIOD = 14
-MOMENTUM_MIN = 0.0005 # Minimum 0.05% price move over last 2 candles
+MOMENTUM_MIN = 0.0005   # Minimum 0.05% price move to be directional
+MOMENTUM_LOOKBACK = 3   # Candles to look back for momentum (3 × 15m = 45 min)
+MACD_MIN = 0            # Minimum absolute MACD histogram for a signal (0 = disabled)
+                        # Note: MACD is in price units — tune per-asset before enabling
 MIN_CONFIDENCE = 4    # All 4 signals must agree to enter
 FORCE_TRADE = True    # Data collection mode: majority vote, trades every window
 
@@ -50,7 +53,6 @@ STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.00"))
 CASH_SPLIT = 0.50           # 50% of portfolio always in cash
 CAPITAL_SPLIT = 0.50        # 50% available for trading
 PROFIT_TO_CASH = 0.50       # 50% of each profit goes to cash
-PROFIT_TO_CAPITAL = 0.50    # 50% of each profit stays in capital
 
 # --- Risk ---
 DAILY_LOSS_LIMIT = 1.00     # Data collection: disabled (100% loss required to halt)
@@ -68,5 +70,3 @@ CONTRACT_PRICE_MAX = 0.60   # Don't buy if contract is more expensive than 60¢ 
 KALSHI_MAKER_FEE = 0.0175   # Maker fee coefficient (limit orders)
 KALSHI_TAKER_FEE = 0.07     # Taker fee coefficient (market orders)
 
-# --- No-Trade Windows (minutes before/after macro events) ---
-NO_TRADE_BUFFER_MINS = 30

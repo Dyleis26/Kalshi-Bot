@@ -1,4 +1,5 @@
 import os
+import threading
 import pandas as pd
 from data.kraken import KrakenFeed
 from administration.config import INTERVALS, CANDLE_LIMIT
@@ -9,6 +10,7 @@ STORAGE_DIR = os.path.join(os.path.dirname(__file__), "storage")
 class History:
     def __init__(self, asset: str = "BTC"):
         self.asset = asset
+        self._lock = threading.Lock()
         os.makedirs(STORAGE_DIR, exist_ok=True)
         self.feed = KrakenFeed()
 
@@ -22,16 +24,17 @@ class History:
         Pulls from Kraken if no local file exists, otherwise loads local
         and appends any missing candles since last save.
         """
-        path = self._path(interval)
-        if not os.path.exists(path):
-            df = self.feed.get_candles(interval, asset=self.asset, limit=CANDLE_LIMIT)
+        with self._lock:
+            path = self._path(interval)
+            if not os.path.exists(path):
+                df = self.feed.get_candles(interval, asset=self.asset, limit=CANDLE_LIMIT)
+                self._save(df, path)
+                return df
+
+            df = self._read(path)
+            df = self._update(df, interval)
             self._save(df, path)
             return df
-
-        df = self._read(path)
-        df = self._update(df, interval)
-        self._save(df, path)
-        return df
 
     def load_all(self):
         """Load 1H and 15M candles and return as a dict."""
@@ -42,18 +45,19 @@ class History:
 
     def append(self, candle: dict, interval: str):
         """Append a single live candle to the local CSV (called by WebSocket handler)."""
-        path = self._path(interval)
-        row = pd.DataFrame([candle])[["time", "open", "high", "low", "close", "volume"]]
-        if not os.path.exists(path):
-            row.to_csv(path, index=False)
-            return
-        df = self._read(path)
-        # Avoid duplicate candles
-        if not df.empty and df["time"].iloc[-1] == row["time"].iloc[0]:
-            df.iloc[-1] = row.iloc[0]
-        else:
-            df = pd.concat([df, row], ignore_index=True)
-        self._save(df, path)
+        with self._lock:
+            path = self._path(interval)
+            row = pd.DataFrame([candle])[["time", "open", "high", "low", "close", "volume"]]
+            if not os.path.exists(path):
+                row.to_csv(path, index=False)
+                return
+            df = self._read(path)
+            # Avoid duplicate candles
+            if not df.empty and df["time"].iloc[-1] == row["time"].iloc[0]:
+                df.iloc[-1] = row.iloc[0]
+            else:
+                df = pd.concat([df, row], ignore_index=True)
+            self._save(df, path)
 
     # ------------------------------------------------------------------ #
     #  Private                                                             #

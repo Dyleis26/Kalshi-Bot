@@ -34,8 +34,7 @@ class PaperTrader:
         self.monitor   = Monitor()
         self.discord   = Discord(paper=True)
         self.trade_log = TradeLog(mode="paper")
-        self.kalshi      = KalshiClient(paper=True)   # demo — ticker discovery & settlement
-        self.kalshi_live = KalshiClient(paper=False)  # live — read-only price lookups
+        self.kalshi = KalshiClient(paper=True)   # demo — ticker discovery & settlement
 
         # Per-asset state: dataframes, live price, history manager
         self.assets: dict = {
@@ -52,14 +51,15 @@ class PaperTrader:
         self.trades_this_hour  = {asset: 0 for asset in ASSETS}
         self.hour_window_start = {asset: time.monotonic() for asset in ASSETS}
 
-        # Kalshi market tickers (cached at startup)
-        self.kalshi_tickers: dict = {asset: None for asset in ASSETS}
+        # Kalshi ticker cache (2-minute TTL — 15M markets rotate every 15 min)
+        self._ticker_cache: dict = {asset: {"ticker": None, "ts": 0.0} for asset in ASSETS}
 
         # Session stats — reset every time the bot restarts
         self.session_wins   = 0
         self.session_losses = 0
         self.session_pnl    = 0.0
         self._open_stake    = 0.0  # Sum of costs for all currently open trades
+        self._last_1h_refresh = 0.0  # monotonic time of last 1H candle refresh
 
         self.running   = False
         self._stopped  = False  # Guard against double bot_stopped Discord messages
@@ -83,15 +83,6 @@ class PaperTrader:
             data = state["history"].load_all()
             state["df_1h"]  = data["1h"]
             state["df_15m"] = data["15m"]
-
-        # Cache Kalshi market tickers for all assets
-        for asset in ASSETS:
-            m = self.kalshi.get_market_for_asset(asset)
-            self.kalshi_tickers[asset] = m.get("ticker") if m else None
-            if self.kalshi_tickers[asset]:
-                logger.info(f"Kalshi ticker for {asset}: {self.kalshi_tickers[asset]}")
-            else:
-                logger.warning(f"No Kalshi ticker found for {asset} — will fall back to Kraken")
 
         self.monitor.set_connected("kraken",  True)
         self.monitor.set_connected("kalshi",  True)
@@ -131,7 +122,13 @@ class PaperTrader:
         with self._lock:
             row = pd.DataFrame([candle])[["time", "open", "high", "low", "close", "volume"]]
             state = self.assets[asset]
-            state["df_15m"] = pd.concat([state["df_15m"], row], ignore_index=True).tail(300)
+            candle_time = row["time"].iloc[0]
+            df = state["df_15m"]
+            if not df.empty and pd.Timestamp(df["time"].iloc[-1]) == pd.Timestamp(candle_time):
+                # Same candle arrived twice (backfill + WS, or WS reconnect) — update in place
+                state["df_15m"].iloc[-1] = row.iloc[0]
+            else:
+                state["df_15m"] = pd.concat([df, row], ignore_index=True).tail(300)
             state["history"].append(candle, "15m")
         self._evaluate(asset)
 
@@ -169,12 +166,19 @@ class PaperTrader:
 
         self._simulate_trade(asset, direction, decision)
 
+    def _get_kalshi_ticker(self, asset: str) -> str | None:
+        """Return the current Kalshi ticker for an asset, using a 2-minute TTL cache."""
+        now = time.monotonic()
+        cache = self._ticker_cache[asset]
+        if cache["ticker"] and (now - cache["ts"]) < 120:
+            return cache["ticker"]
+        m = self.kalshi.get_market_for_asset(asset)
+        ticker = m.get("ticker") if m else None
+        self._ticker_cache[asset] = {"ticker": ticker, "ts": now}
+        return ticker
+
     def _simulate_trade(self, asset: str, direction: str, decision: dict):
-        # Fetch the current open market ticker fresh from the demo API on every trade.
-        # The 15M series has a new market every 15 minutes — the startup cache goes stale
-        # after the first candle. The live API key is demo-only; use self.kalshi throughout.
-        current_market = self.kalshi.get_market_for_asset(asset)
-        kalshi_ticker = current_market.get("ticker") if current_market else None
+        kalshi_ticker = self._get_kalshi_ticker(asset)
 
         if kalshi_ticker:
             contract_price = self.kalshi.get_market_price(kalshi_ticker)
@@ -221,9 +225,6 @@ class PaperTrader:
 
         log_trade(direction, live_price, total_cost)
         self.monitor.record_order_placed()
-        with self._lock:
-            self.trades_this_hour[asset] += 1
-
         self.discord.buy(
             direction=direction,
             contracts=contracts,
@@ -238,17 +239,26 @@ class PaperTrader:
             session_pnl=self.session_pnl,
         )
 
+        # Compute the settlement candle's open time (15M boundary at moment of trade entry).
+        # Passed to _resolve_trade so it looks up the correct candle instead of df_15m.iloc[-1].
+        from datetime import datetime as _dt, timezone as _tz
+        _now = _dt.now(_tz.utc)
+        _m = _now.minute - (_now.minute % 15)
+        settlement_open = _now.replace(minute=_m, second=0, microsecond=0, tzinfo=None)
+
         t = threading.Timer(
             15 * 60,
             self._resolve_trade,
-            args=[asset, direction, contracts, contract_price, price_pct, trade_id, kalshi_ticker]
+            args=[asset, direction, contracts, contract_price, price_pct, trade_id,
+                  kalshi_ticker, settlement_open]
         )
         t.daemon = True  # Dies with the process — no ghost resolutions after restart
         t.start()
 
     def _resolve_trade(self, asset: str, direction: str, contracts: int,
                        contract_price: float, price_pct: float,
-                       trade_id: str, kalshi_ticker: str = None):
+                       trade_id: str, kalshi_ticker: str = None,
+                       settlement_open=None):
 
         # Kalshi settlement (ground truth)
         kalshi_result = None
@@ -261,9 +271,19 @@ class PaperTrader:
 
         state = self.assets[asset]
         with self._lock:
-            if state["df_15m"].empty or len(state["df_15m"]) < 2:
+            df = state["df_15m"]
+            if df.empty or len(df) < 2:
                 return
-            last       = state["df_15m"].iloc[-1]
+            # Find the specific settlement candle by its open time rather than blindly using
+            # the latest candle (which may already be the NEXT 15M candle due to timing).
+            last = None
+            if settlement_open is not None:
+                target = pd.Timestamp(settlement_open)
+                match = df[df["time"].apply(pd.Timestamp) == target]
+                if not match.empty:
+                    last = match.iloc[0]
+            if last is None:
+                last = df.iloc[-1]  # fallback
             went_up    = last["close"] > last["open"]
             last_candle = last.to_dict()
 
@@ -346,110 +366,20 @@ class PaperTrader:
                 self.discord.bot_stopped(port_total_halt)
 
     # ------------------------------------------------------------------ #
-    #  Startup Recovery                                                   #
-    # ------------------------------------------------------------------ #
-
-    def _recover_orphaned_trades(self):
-        """
-        Scan trades.csv at startup for open trades older than 15 minutes
-        and retroactively resolve them using Kraken 15M candle data.
-        """
-        df = self.trade_log.load()
-        if df.empty:
-            return
-
-        open_trades = df[df["result"].isna() & df["entry_time"].notna()]
-        if open_trades.empty:
-            return
-
-        now = datetime.now(timezone.utc)
-        recovered = 0
-
-        # Pre-fetch candles once per asset to avoid redundant REST calls
-        candle_cache: dict = {}
-
-        for _, row in open_trades.iterrows():
-            trade_id       = row["trade_id"]
-            asset          = str(row["asset"])
-            direction      = str(row["direction"])
-            contracts      = int(row["contracts"])
-            contract_price = float(row["contract_price_pct"]) / 100.0
-
-            entry_time = pd.to_datetime(row["entry_time"], utc=True)
-            age_mins   = (now - entry_time).total_seconds() / 60
-
-            if age_mins < 16:  # Not yet resolvable — trade window may still be open
-                continue
-
-            if asset not in ASSETS:
-                logger.warning(f"Recovery: unknown asset '{asset}' for trade {trade_id} — skipping")
-                continue
-
-            if asset not in candle_cache:
-                fetched = self.feed.get_candles("15m", asset=asset, limit=200)
-                if fetched.empty:
-                    logger.warning(f"Recovery: no candles for {asset} — skipping {trade_id}")
-                    continue
-                fetched["time"] = pd.to_datetime(fetched["time"])
-                candle_cache[asset] = fetched
-            candles = candle_cache[asset]
-
-            # Settlement candle opens at the 15M boundary at/after entry_time
-            entry_dt = entry_time.to_pydatetime()
-            m = entry_dt.minute - (entry_dt.minute % 15)
-            settlement_open = entry_dt.replace(minute=m, second=0, microsecond=0)
-            settlement_open_naive = settlement_open.replace(tzinfo=None)
-
-            match = candles[candles["time"] == settlement_open_naive]
-            if match.empty:
-                # Try the next 15M window
-                nxt = settlement_open_naive + pd.Timedelta(minutes=15)
-                match = candles[candles["time"] == nxt]
-            if match.empty:
-                logger.warning(f"Recovery: no candle at {settlement_open_naive} for {asset} {trade_id} — skipping")
-                continue
-
-            candle = match.iloc[0].to_dict()
-            went_up = float(candle["close"]) > float(candle["open"])
-            win = (direction == LONG and went_up) or (direction == SHORT and not went_up)
-
-            actual_cost = contracts * contract_price
-            fee_one_leg = KALSHI_MAKER_FEE * actual_cost * (1 - contract_price)
-
-            if win:
-                fee_paid = round(fee_one_leg * 2, 4)
-                pnl      = round(contracts * 1.00 - actual_cost - fee_paid, 4)
-                result   = "win"
-            else:
-                fee_paid = round(fee_one_leg, 4)
-                pnl      = round(-actual_cost - fee_paid, 4)
-                result   = "loss"
-
-            self.trade_log.close_trade(
-                trade_id, result, pnl, fee_paid, candle,
-                {"capital": 0, "cash": 0, "total": 0},
-            )
-            logger.info(
-                f"Recovered orphaned trade {trade_id}: {asset} {direction} → {result} "
-                f"(PnL: {pnl:+.4f}, candle open={candle['open']:.4f} close={candle['close']:.4f})"
-            )
-            recovered += 1
-
-        if recovered:
-            logger.info(f"Startup recovery: {recovered} orphaned trade(s) resolved.")
-        else:
-            logger.info("Startup recovery: no orphaned trades found.")
-
-    # ------------------------------------------------------------------ #
     #  Guards                                                              #
     # ------------------------------------------------------------------ #
 
     def _within_trade_limit(self, asset: str) -> bool:
-        now = time.monotonic()
-        if now - self.hour_window_start[asset] >= 3600:
-            self.trades_this_hour[asset]  = 0
-            self.hour_window_start[asset] = now
-        return self.trades_this_hour[asset] < MAX_TRADES_PER_HOUR
+        """Check hourly trade limit and pre-increment atomically to prevent races."""
+        with self._lock:
+            now = time.monotonic()
+            if now - self.hour_window_start[asset] >= 3600:
+                self.trades_this_hour[asset]  = 0
+                self.hour_window_start[asset] = now
+            if self.trades_this_hour[asset] < MAX_TRADES_PER_HOUR:
+                self.trades_this_hour[asset] += 1
+                return True
+            return False
 
     # ------------------------------------------------------------------ #
     #  Heartbeat                                                           #
@@ -460,11 +390,14 @@ class PaperTrader:
             while self.running:
                 time.sleep(900)
                 self.monitor.print_status()
-                # Refresh 1H candles from REST for all assets
-                for asset, state in self.assets.items():
-                    fresh_1h = state["history"].load("1h")
-                    with self._lock:
-                        state["df_1h"] = fresh_1h
+                # Refresh 1H candles from REST at most once per hour (4 heartbeat cycles)
+                now = time.monotonic()
+                if now - self._last_1h_refresh >= 3600:
+                    for asset, state in self.assets.items():
+                        fresh_1h = state["history"].load("1h")
+                        with self._lock:
+                            state["df_1h"] = fresh_1h
+                    self._last_1h_refresh = now
                 if self._is_new_day():
                     self.portfolio.reset_day()
         except (KeyboardInterrupt, SystemExit):

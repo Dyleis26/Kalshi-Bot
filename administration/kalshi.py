@@ -109,13 +109,12 @@ class KalshiClient:
             log_error(f"Failed to fetch market {ticker}", e)
             return None
 
-    def get_market_result(self, ticker: str, retries: int = 6, delay: int = 10) -> str | None:
+    def get_market_result(self, ticker: str, retries: int = 4, delay: int = 15) -> str | None:
         """
         Poll until a market has settled and return 'yes' or 'no'.
-        Waits up to retries * delay seconds (default 60s).
+        Waits up to retries * delay seconds (default 60s, 4 polls × 15s).
         Returns None if it never settles in time.
         """
-        import time
         for _ in range(retries):
             m = self.get_market(ticker)
             if m and m.get("result") in ("yes", "no"):

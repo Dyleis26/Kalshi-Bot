@@ -170,14 +170,14 @@ class PaperTrader:
         self._simulate_trade(asset, direction, decision)
 
     def _simulate_trade(self, asset: str, direction: str, decision: dict):
-        # Fetch the current open market ticker fresh from the live API on every trade.
+        # Fetch the current open market ticker fresh from the demo API on every trade.
         # The 15M series has a new market every 15 minutes — the startup cache goes stale
-        # after the first candle. kalshi_live (paper=False) has real orderbooks.
-        live_market = self.kalshi_live.get_market_for_asset(asset)
-        kalshi_ticker = live_market.get("ticker") if live_market else None
+        # after the first candle. The live API key is demo-only; use self.kalshi throughout.
+        current_market = self.kalshi.get_market_for_asset(asset)
+        kalshi_ticker = current_market.get("ticker") if current_market else None
 
         if kalshi_ticker:
-            contract_price = self.kalshi_live.get_market_price(kalshi_ticker)
+            contract_price = self.kalshi.get_market_price(kalshi_ticker)
             if contract_price >= 1.0:
                 logger.info(f"{asset}: no Kalshi asks — skipping trade")
                 return

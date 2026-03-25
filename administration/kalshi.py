@@ -138,7 +138,7 @@ class KalshiClient:
         """
         book = self.get_orderbook(ticker)
         if not book:
-            return 0.50
+            return 1.0  # API error or stale ticker — skip trade, don't assume 50¢
         asks = book.get("orderbook", {}).get("asks", [])
         if asks:
             return round(asks[0][0] / 100, 4)

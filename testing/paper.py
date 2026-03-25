@@ -170,11 +170,12 @@ class PaperTrader:
         self._simulate_trade(asset, direction, decision)
 
     def _simulate_trade(self, asset: str, direction: str, decision: dict):
-        # Fetch live contract price from production Kalshi API.
-        # kalshi_live (paper=False) has real orderbooks; kalshi (paper=True) demo books are empty.
-        # If no asks on live (1.0 returned), skip the trade — no liquidity.
-        # Falls back to 0.50 only when no ticker is cached.
-        kalshi_ticker = self.kalshi_tickers.get(asset)
+        # Fetch the current open market ticker fresh from the live API on every trade.
+        # The 15M series has a new market every 15 minutes — the startup cache goes stale
+        # after the first candle. kalshi_live (paper=False) has real orderbooks.
+        live_market = self.kalshi_live.get_market_for_asset(asset)
+        kalshi_ticker = live_market.get("ticker") if live_market else None
+
         if kalshi_ticker:
             contract_price = self.kalshi_live.get_market_price(kalshi_ticker)
             if contract_price >= 1.0:

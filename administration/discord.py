@@ -78,9 +78,9 @@ class Discord:
             session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
         side = "UP" if direction == "long" else "DOWN"
         pnl_sign = "+" if session_pnl >= 0 else ""
-        fill_str = (f"{contracts_filled}/{contracts} filled"
+        fill_str = (f"{contracts_filled}/{contracts}"
                     if contracts_filled != contracts
-                    else f"{contracts_filled} filled")
+                    else f"{contracts_filled}")
         self._send(
             title=f"🚀 BUY: {asset} {side}",
             color=BLUE,
@@ -100,9 +100,9 @@ class Discord:
                  session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
         side = "UP" if direction == "long" else "DOWN"
         pnl_sign = "+" if session_pnl >= 0 else ""
-        fill_str = (f"{contracts_filled}/{contracts} filled"
+        fill_str = (f"{contracts_filled}/{contracts}"
                     if contracts_filled != contracts
-                    else f"{contracts_filled} filled")
+                    else f"{contracts_filled}")
         self._send(
             title=f"✅ SELL: {asset} {side}",
             color=GREEN,
@@ -122,9 +122,9 @@ class Discord:
                   session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
         side = "UP" if direction == "long" else "DOWN"
         pnl_sign = "+" if session_pnl >= 0 else ""
-        fill_str = (f"{contracts_filled}/{contracts} filled"
+        fill_str = (f"{contracts_filled}/{contracts}"
                     if contracts_filled != contracts
-                    else f"{contracts_filled} filled")
+                    else f"{contracts_filled}")
         self._send(
             title=f"❌ SELL: {asset} {side}",
             color=RED,

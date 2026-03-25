@@ -238,11 +238,13 @@ class PaperTrader:
             session_pnl=self.session_pnl,
         )
 
-        threading.Timer(
+        t = threading.Timer(
             15 * 60,
             self._resolve_trade,
             args=[asset, direction, contracts, contract_price, price_pct, trade_id, kalshi_ticker]
-        ).start()
+        )
+        t.daemon = True  # Dies with the process — no ghost resolutions after restart
+        t.start()
 
     def _resolve_trade(self, asset: str, direction: str, contracts: int,
                        contract_price: float, price_pct: float,

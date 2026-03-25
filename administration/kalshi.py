@@ -142,7 +142,7 @@ class KalshiClient:
         asks = book.get("orderbook", {}).get("asks", [])
         if asks:
             return round(asks[0][0] / 100, 4)
-        return 1.0  # No asks = no liquidity; 1.0 forces the contract price filter to skip
+        return 0.50  # No asks — demo API has empty books; use fair value for paper trading
 
     # ------------------------------------------------------------------ #
     #  Orders                                                              #

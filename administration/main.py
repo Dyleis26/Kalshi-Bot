@@ -7,11 +7,31 @@ Modes:
   python -m administration.main optimize   → Run RBI optimizer
 """
 
+import os
 import sys
+import atexit
 from administration.security import validate_env, kill
 from administration.logger import get as get_logger, log_error
 
 logger = get_logger("main")
+
+PID_FILE = "/tmp/kalshi_bot.pid"
+
+
+def _acquire_pid_lock():
+    """Prevent multiple bot instances. Exits if another instance is already running."""
+    if os.path.exists(PID_FILE):
+        with open(PID_FILE) as f:
+            old_pid = int(f.read().strip())
+        try:
+            os.kill(old_pid, 0)  # 0 = just check existence
+            logger.error(f"Bot already running (PID {old_pid}). Stop it first.")
+            sys.exit(1)
+        except ProcessLookupError:
+            pass  # Stale PID file from a crashed run — safe to continue
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+    atexit.register(lambda: os.path.exists(PID_FILE) and os.remove(PID_FILE))
 
 
 def run_paper():
@@ -71,6 +91,7 @@ def main():
         sys.exit(1)
 
     if mode == "paper":
+        _acquire_pid_lock()
         run_paper()
     elif mode == "backtest":
         run_backtest()

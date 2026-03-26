@@ -180,24 +180,23 @@ class PaperTrader:
     def _simulate_trade(self, asset: str, direction: str, decision: dict):
         kalshi_ticker = self._get_kalshi_ticker(asset)
 
-        if kalshi_ticker:
-            side = "yes" if direction == LONG else "no"
-            contract_price = self.kalshi.get_market_price(kalshi_ticker, side)
-            if contract_price >= 1.0:
-                # No price data — use fair value in FORCE_TRADE, skip otherwise
-                if FORCE_TRADE:
-                    contract_price = 0.50
-                else:
-                    logger.info(f"{asset}: no Kalshi price — skipping trade")
-                    return
-            elif not FORCE_TRADE and not (CONTRACT_PRICE_MIN <= contract_price <= CONTRACT_PRICE_MAX):
-                logger.info(
-                    f"{asset}: contract price {contract_price:.2f} outside "
-                    f"[{CONTRACT_PRICE_MIN:.2f}, {CONTRACT_PRICE_MAX:.2f}] — skipping trade"
-                )
-                return
-        else:
-            contract_price = 0.50
+        if not kalshi_ticker:
+            logger.info(f"{asset}: no Kalshi market found — skipping trade")
+            return
+
+        side = "yes" if direction == LONG else "no"
+        contract_price = self.kalshi.get_market_price(kalshi_ticker, side)
+
+        if contract_price >= 1.0:
+            logger.info(f"{asset}: no real Kalshi price available — skipping trade")
+            return
+
+        if not (CONTRACT_PRICE_MIN <= contract_price <= CONTRACT_PRICE_MAX):
+            logger.info(
+                f"{asset}: contract price {contract_price:.2f} outside "
+                f"[{CONTRACT_PRICE_MIN:.2f}, {CONTRACT_PRICE_MAX:.2f}] — skipping trade"
+            )
+            return
 
         size = self.strategy.size()
 

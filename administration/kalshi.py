@@ -130,18 +130,31 @@ class KalshiClient:
             log_error(f"Failed to fetch orderbook for {ticker}", e)
             return None
 
-    def get_market_price(self, ticker: str) -> float:
+    def get_market_price(self, ticker: str, side: str = "yes") -> float:
         """
-        Return the best YES ask price (0.0 to 1.0) for a market.
-        Returns 1.0 (outside filter range) when no asks exist so the trade is skipped.
+        Return the best ask price (0.0–1.0) for the given side ('yes' or 'no').
+        Reads market fields directly — demo API orderbooks are always empty.
+        Falls back to last_price if the directional ask has no seller (price = 1.0).
+        Returns 1.0 to signal "skip this trade" on API error or truly no price.
         """
-        book = self.get_orderbook(ticker)
-        if not book:
-            return 1.0  # API error or stale ticker — skip trade, don't assume 50¢
-        asks = book.get("orderbook", {}).get("asks", [])
-        if asks:
-            return round(asks[0][0] / 100, 4)
-        return 0.50  # No asks — demo API has empty books; use fair value for paper trading
+        market = self.get_market(ticker)
+        if not market:
+            return 1.0  # API error — skip trade
+
+        field = "yes_ask_dollars" if side == "yes" else "no_ask_dollars"
+        price = float(market.get(field, 0.0))
+
+        # 0.0 means no ask exists; 1.0 means no seller at a real price — both invalid
+        if 0.0 < price < 1.0:
+            return round(price, 4)
+
+        # No directional ask — fall back to last traded price
+        last = float(market.get("last_price_dollars", 0.0))
+        if last > 0.0:
+            fair = last if side == "yes" else round(1.0 - last, 4)
+            return round(fair, 4)
+
+        return 1.0  # No price data at all — skip trade
 
     # ------------------------------------------------------------------ #
     #  Orders                                                              #

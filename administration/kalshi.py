@@ -7,8 +7,9 @@ from administration.config import KALSHI_API_KEY, KALSHI_KEY_PATH, ASSETS
 from administration.logger import log_error
 from administration.security import rate_limited_call
 
-BASE_URL = "https://trading-api.kalshi.com/trade-api/v2"
-DEMO_URL = "https://demo-api.kalshi.co/trade-api/v2"
+BASE_URL   = "https://trading-api.kalshi.com/trade-api/v2"
+DEMO_URL   = "https://demo-api.kalshi.co/trade-api/v2"
+PUBLIC_URL = "https://api.elections.kalshi.com/trade-api/v2"  # No auth required — real live data
 
 
 class KalshiClient:
@@ -51,6 +52,14 @@ class KalshiClient:
             "Content-Type": "application/json",
         }
 
+    def _get_public(self, path: str, params: dict = None):
+        """Unauthenticated GET against the public Kalshi API (real live market data)."""
+        def call():
+            r = requests.get(PUBLIC_URL + path, params=params, timeout=10)
+            r.raise_for_status()
+            return r.json()
+        return rate_limited_call("kalshi", call)
+
     def _get(self, path: str, params: dict = None):
         def call():
             r = self.session.get(self.base + path, headers=self._sign("GET", path), params=params, timeout=10)
@@ -79,16 +88,15 @@ class KalshiClient:
     def get_market_for_asset(self, asset: str) -> dict | None:
         """
         Find the active 15-minute Up/Down market for the given asset.
+        Uses the public API (no auth) so all 5 assets return real live data.
         Returns the market dict or None if not found.
         """
         series = ASSETS.get(asset, {}).get("kalshi_series")
         if not series:
             return None
         try:
-            data = self._get("/markets", params={"status": "open", "series_ticker": series})
+            data = self._get_public("/markets", params={"status": "open", "series_ticker": series})
             markets = data.get("markets", [])
-            # The 15M directional series has exactly one open market at a time;
-            # title is e.g. "BTC price up in next 15 mins?" — just return the first open market.
             if markets:
                 return markets[0]
             return None
@@ -101,9 +109,9 @@ class KalshiClient:
         return self.get_market_for_asset("BTC")
 
     def get_market(self, ticker: str) -> dict:
-        """Fetch a single market by ticker (works for open, closed, and settled)."""
+        """Fetch a single market by ticker using the public API (real live data, no auth)."""
         try:
-            data = self._get(f"/markets/{ticker}")
+            data = self._get_public(f"/markets/{ticker}")
             return data.get("market")
         except Exception as e:
             log_error(f"Failed to fetch market {ticker}", e)

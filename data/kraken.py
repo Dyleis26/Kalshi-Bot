@@ -6,6 +6,7 @@ import websocket
 import pandas as pd
 from administration.config import CANDLE_LIMIT, ASSETS
 from administration.logger import get as get_logger
+from administration.security import rate_limited_call
 
 logger = get_logger("kraken")
 
@@ -45,13 +46,15 @@ class KrakenFeed:
         symbol_rest = ASSETS[asset]["kraken_rest"]
         since = int(time.time()) - (minutes * 60 * limit)
         try:
-            r = requests.get(f"{REST_URL}/OHLC", params={
-                "pair":     symbol_rest,
-                "interval": minutes,
-                "since":    since,
-            }, timeout=10)
-            r.raise_for_status()
-            data = r.json()
+            def _call():
+                r = requests.get(f"{REST_URL}/OHLC", params={
+                    "pair":     symbol_rest,
+                    "interval": minutes,
+                    "since":    since,
+                }, timeout=10)
+                r.raise_for_status()
+                return r.json()
+            data = rate_limited_call("kraken", _call)
             if data.get("error"):
                 logger.error(f"Kraken REST error ({asset}): {data['error']}")
                 return pd.DataFrame()
@@ -246,7 +249,12 @@ class KrakenFeed:
         df = pd.DataFrame(raw, columns=[
             "time", "open", "high", "low", "close", "vwap", "volume", "count"
         ])
-        df = df.assign(time=pd.to_datetime(df["time"].astype(int), unit="s"))
-        for col in ["open", "high", "low", "close", "volume"]:
-            df.loc[:, col] = df[col].astype(float)
+        df = df.assign(
+            time=pd.to_datetime(df["time"].astype(int), unit="s"),
+            open=pd.to_numeric(df["open"]),
+            high=pd.to_numeric(df["high"]),
+            low=pd.to_numeric(df["low"]),
+            close=pd.to_numeric(df["close"]),
+            volume=pd.to_numeric(df["volume"]),
+        )
         return df[["time", "open", "high", "low", "close", "volume"]].reset_index(drop=True)

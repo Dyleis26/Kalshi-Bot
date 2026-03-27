@@ -55,13 +55,15 @@ def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> f
     return round(float(histogram.iloc[-1]), 6)
 
 
-def macd_bias(histogram: float) -> str:
+def macd_bias(histogram: float, price: float = 1.0) -> str:
     """Returns 'bull', 'bear', or 'neutral' based on MACD histogram.
-    MACD_MIN deadband filters noise; set to 0 to disable (default).
+    Threshold is normalized by price so MACD_MIN works across all assets
+    (BTC at $70K and DOGE at $0.09 have very different histogram scales).
     """
-    if histogram > cfg.MACD_MIN:
+    threshold = cfg.MACD_MIN * price
+    if histogram > threshold:
         return "bull"
-    elif histogram < -cfg.MACD_MIN:
+    elif histogram < -threshold:
         return "bear"
     return "neutral"
 
@@ -138,11 +140,12 @@ def evaluate(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
             "vwap_bias":     'bull'|'bear'|'neutral',
         }
     """
-    rsi_val = rsi(df_1h)
+    rsi_val  = rsi(df_1h)
     macd_val = macd(df_1h)
-    mom_val = momentum(df_15m)
+    mom_val  = momentum(df_15m)
     vwap_val = vwap(df_15m)
-    price = float(df_15m["close"].iloc[-1])
+    price    = float(df_15m["close"].iloc[-1])
+    price_1h = float(df_1h["close"].iloc[-1])   # Use 1H price to normalize MACD
 
     return {
         "rsi":           rsi_val,
@@ -151,7 +154,7 @@ def evaluate(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
         "vwap":          vwap_val,
         "price":         price,
         "rsi_bias":      rsi_bias(rsi_val),
-        "macd_bias":     macd_bias(macd_val),
+        "macd_bias":     macd_bias(macd_val, price_1h),
         "momentum_bias": momentum_bias(mom_val),
         "vwap_bias":     vwap_bias(price, vwap_val),
     }

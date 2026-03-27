@@ -11,12 +11,8 @@ NONE  = "none"   # No trade
 
 
 class Strategy:
-    def __init__(self, win_rate: float = 0.57):
-        """
-        win_rate: assumed win probability used for Kelly sizing.
-        Start conservative at 57% — update after backtesting.
-        """
-        self.win_rate = win_rate
+    def __init__(self):
+        pass
 
     # ------------------------------------------------------------------ #
     #  Entry Decision                                                      #
@@ -39,15 +35,14 @@ class Strategy:
             signals["rsi_bias"],
             signals["macd_bias"],
             signals["momentum_bias"],
-            signals["momentum_bias"],  # Double-weight momentum — fastest signal, replaces structural VWAP vote
-            # Note: vwap_bias is computed and logged for analysis but not voted on
+            signals["vwap_bias"],   # All 4 signals get equal weight
         ]
 
         bull_count = biases.count("bull")
         bear_count = biases.count("bear")
 
         if FORCE_TRADE:
-            # Data collection mode: majority vote, always enter
+            # Majority vote: need strict majority (3-1 or 4-0), or a clear tiebreaker on 2-2
             if bull_count > bear_count:
                 direction = LONG
                 reason = f"Force/majority — bull={bull_count} bear={bear_count}"
@@ -55,16 +50,23 @@ class Strategy:
                 direction = SHORT
                 reason = f"Force/majority — bull={bull_count} bear={bear_count}"
             else:
-                # Tie: use momentum as tiebreaker (most reactive), fall back to RSI
+                # 2-2 tie: use momentum as tiebreaker (most reactive), then RSI
+                # If neither provides a clear direction, skip — don't guess
                 if signals["momentum_bias"] == "bear":
                     direction = SHORT
+                    reason = f"Force/tie — mom tiebreaker bear"
                 elif signals["momentum_bias"] == "bull":
                     direction = LONG
+                    reason = f"Force/tie — mom tiebreaker bull"
                 elif signals["rsi_bias"] == "bear":
                     direction = SHORT
-                else:
+                    reason = f"Force/tie — rsi tiebreaker bear"
+                elif signals["rsi_bias"] == "bull":
                     direction = LONG
-                reason = f"Force/tie — mom={signals['momentum_bias']} rsi={signals['rsi']:.1f}"
+                    reason = f"Force/tie — rsi tiebreaker bull"
+                else:
+                    direction = NONE   # All signals flat — skip rather than guess
+                    reason = f"Force/tie — no tiebreaker (mom={signals['momentum_bias']} rsi={signals['rsi']:.1f})"
         elif bull_count >= MIN_CONFIDENCE:
             direction = LONG
             reason = "All 4 signals bullish"
@@ -101,18 +103,3 @@ class Strategy:
         """
         return MIN_BET
 
-    # ------------------------------------------------------------------ #
-    #  Contract Direction                                                  #
-    # ------------------------------------------------------------------ #
-
-    def contract_side(self, direction: str) -> str:
-        """
-        Map trade direction to Kalshi contract side.
-        LONG  → buy YES on the "Up" market
-        SHORT → buy YES on the "Down" market (or buy NO on "Up")
-        """
-        if direction == LONG:
-            return "yes"
-        elif direction == SHORT:
-            return "no"
-        return None

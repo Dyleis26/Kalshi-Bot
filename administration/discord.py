@@ -1,3 +1,4 @@
+import threading
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -44,10 +45,12 @@ class Discord:
             "color":       color,
             "footer":      {"text": self._footer()},
         }
-        try:
-            requests.post(self.url, json={"embeds": [embed]}, timeout=5)
-        except Exception as e:
-            logger.warning(f"Discord send failed: {e}")
+        def _post():
+            try:
+                requests.post(self.url, json={"embeds": [embed]}, timeout=5)
+            except Exception as e:
+                logger.warning(f"Discord send failed: {e}")
+        threading.Thread(target=_post, daemon=True).start()
 
     # ------------------------------------------------------------------ #
     #  Notifications                                                       #

@@ -37,12 +37,13 @@ class PaperTrader:
         self.kalshi = KalshiClient(paper=True)   # demo — ticker discovery & settlement
 
         # Per-asset state: dataframes, live price, history manager
+        # All History instances share the same KrakenFeed (REST calls only — thread-safe)
         self.assets: dict = {
             asset: {
                 "df_1h":   pd.DataFrame(),
                 "df_15m":  pd.DataFrame(),
                 "price":   0.0,
-                "history": History(asset),
+                "history": History(asset, feed=self.feed),
             }
             for asset in ASSETS
         }
@@ -61,10 +62,11 @@ class PaperTrader:
         self._open_stake    = 0.0  # Sum of costs for all currently open trades
         self._last_1h_refresh = 0.0  # monotonic time of last 1H candle refresh
 
-        self.running   = False
-        self._stopped  = False  # Guard against double bot_stopped Discord messages
-        self._lock     = threading.Lock()
-        self._ready_at = None
+        self.running          = False
+        self._stopped         = False  # Guard against double bot_stopped Discord messages
+        self._lock            = threading.Lock()
+        self._ready_at        = None
+        self._last_reset_date = None   # Tracks last daily reset date (ET) for _is_new_day()
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
@@ -119,9 +121,9 @@ class PaperTrader:
     def _on_15m_candle(self, asset: str, candle: dict):
         if asset not in self.assets:
             return
+        state = self.assets[asset]  # dict structure is fixed at init — safe outside lock
         with self._lock:
             row = pd.DataFrame([candle])[["time", "open", "high", "low", "close", "volume"]]
-            state = self.assets[asset]
             candle_time = row["time"].iloc[0]
             df = state["df_15m"]
             if not df.empty and pd.Timestamp(df["time"].iloc[-1]) == pd.Timestamp(candle_time):
@@ -129,7 +131,8 @@ class PaperTrader:
                 state["df_15m"].iloc[-1] = row.iloc[0]
             else:
                 state["df_15m"] = pd.concat([df, row], ignore_index=True).tail(300)
-            state["history"].append(candle, "15m")
+        # Append to CSV outside the paper lock — History has its own internal lock
+        state["history"].append(candle, "15m")
         self._evaluate(asset)
 
     def _on_tick(self, asset: str, price: float):
@@ -164,31 +167,55 @@ class PaperTrader:
         if direction == NONE:
             return
 
-        self._simulate_trade(asset, direction, decision)
+        t = threading.Thread(target=self._simulate_trade, args=[asset, direction, decision["signals"]])
+        t.daemon = True
+        t.start()
 
     def _get_kalshi_ticker(self, asset: str) -> str | None:
-        """Return the current Kalshi ticker for an asset, using a 2-minute TTL cache."""
+        """Return the current Kalshi ticker for an asset, using a 15-second TTL cache."""
         now = time.monotonic()
         cache = self._ticker_cache[asset]
-        if cache["ticker"] and (now - cache["ts"]) < 120:
+        if cache["ticker"] and (now - cache["ts"]) < 15:
             return cache["ticker"]
         m = self.kalshi.get_market_for_asset(asset)
         ticker = m.get("ticker") if m else None
         self._ticker_cache[asset] = {"ticker": ticker, "ts": now}
         return ticker
 
-    def _simulate_trade(self, asset: str, direction: str, decision: dict):
+    def _simulate_trade(self, asset: str, direction: str, signals: dict):
         kalshi_ticker = self._get_kalshi_ticker(asset)
 
         if not kalshi_ticker:
             logger.info(f"{asset}: no Kalshi market found — skipping trade")
+            self._release_trade_slot(asset)
             return
 
         side = "yes" if direction == LONG else "no"
-        contract_price = self.kalshi.get_market_price(kalshi_ticker, side)
+
+        # Retry every 30s for up to 14 minutes (window is 15 min; stop before it closes).
+        # Re-fetch ticker each attempt — the market may have rolled to the next window
+        # (Kalshi names markets by settlement time; the old market may still appear
+        # in the series query for a few seconds after the new window opens).
+        retry_start = time.monotonic()
+        WINDOW_SECS = 14 * 60  # 14 minutes
+        attempt = 0
+        contract_price = 1.0
+        while time.monotonic() - retry_start < WINDOW_SECS:
+            fresh_ticker = self._get_kalshi_ticker(asset) or kalshi_ticker
+            contract_price = self.kalshi.get_market_price(fresh_ticker, side)
+            if 0.05 <= contract_price <= 0.95:
+                kalshi_ticker = fresh_ticker  # Use the working ticker for settlement
+                break
+            attempt += 1
+            remaining = WINDOW_SECS - (time.monotonic() - retry_start)
+            if remaining < 30:
+                break
+            logger.info(f"{asset}: Kalshi market not yet priced (price={contract_price:.2f}) — retrying in 30s (attempt {attempt})")
+            time.sleep(30)
 
         if contract_price >= 1.0:
             logger.info(f"{asset}: no real Kalshi price available — skipping trade")
+            self._release_trade_slot(asset)
             return
 
         if not (CONTRACT_PRICE_MIN <= contract_price <= CONTRACT_PRICE_MAX):
@@ -196,12 +223,14 @@ class PaperTrader:
                 f"{asset}: contract price {contract_price:.2f} outside "
                 f"[{CONTRACT_PRICE_MIN:.2f}, {CONTRACT_PRICE_MAX:.2f}] — skipping trade"
             )
+            self._release_trade_slot(asset)
             return
 
         size = self.strategy.size()
 
         contracts = math.floor(size / contract_price)
         if contracts < 1:
+            self._release_trade_slot(asset)
             return
 
         actual_cost      = contracts * contract_price
@@ -223,7 +252,7 @@ class PaperTrader:
             cost=total_cost,
             possible_payout=payout,
             btc_price=live_price,
-            signals=decision["signals"],
+            signals=signals,
             asset=asset,
         )
 
@@ -232,7 +261,7 @@ class PaperTrader:
         self.discord.buy(
             direction=direction,
             contracts=contracts,
-            contracts_filled=contracts,   # paper: always fully filled; live: use order response
+            contracts_filled=contracts,
             price_pct=price_pct,
             cost=total_cost,
             payout=payout,
@@ -243,15 +272,18 @@ class PaperTrader:
             session_pnl=self.session_pnl,
         )
 
-        # Compute the settlement candle's open time (15M boundary at moment of trade entry).
-        # Passed to _resolve_trade so it looks up the correct candle instead of df_15m.iloc[-1].
+        # Compute the settlement candle's open time and exact seconds until settlement.
+        # Fire at the next 15M boundary (not 15 min from now) so we don't poll late
+        # when the trade was entered partway through a window.
         from datetime import datetime as _dt, timezone as _tz
         _now = _dt.now(_tz.utc)
         _m = _now.minute - (_now.minute % 15)
         settlement_open = _now.replace(minute=_m, second=0, microsecond=0, tzinfo=None)
+        seconds_into_window = (_now.minute % 15) * 60 + _now.second + _now.microsecond / 1e6
+        seconds_until_settlement = max(5.0, (15 * 60) - seconds_into_window + 5)  # +5s buffer
 
         t = threading.Timer(
-            15 * 60,
+            seconds_until_settlement,
             self._resolve_trade,
             args=[asset, direction, contracts, contract_price, price_pct, trade_id,
                   kalshi_ticker, settlement_open]
@@ -350,7 +382,7 @@ class PaperTrader:
                 contracts=contracts,
                 contracts_filled=contracts,
                 price_pct=price_pct,
-                pnl=abs(pnl),
+                pnl=pnl,   # negative; discord.py applies abs() for display
                 portfolio_total=port_total,
                 asset=asset,
                 session_wins=s_wins,
@@ -385,6 +417,11 @@ class PaperTrader:
                 return True
             return False
 
+    def _release_trade_slot(self, asset: str):
+        """Return a pre-claimed trade slot when a trade is ultimately skipped."""
+        with self._lock:
+            self.trades_this_hour[asset] = max(0, self.trades_this_hour[asset] - 1)
+
     # ------------------------------------------------------------------ #
     #  Heartbeat                                                           #
     # ------------------------------------------------------------------ #
@@ -399,9 +436,10 @@ class PaperTrader:
                     continue
                 elapsed = 0
                 self.monitor.print_status()
-                # Refresh 1H candles from REST at most once per hour
+                # Refresh 1H candles from REST every 15 min (matches heartbeat cadence)
+                # Keeps RSI/MACD trend filter at most ~15 min stale instead of ~60 min
                 now = time.monotonic()
-                if now - self._last_1h_refresh >= 3600:
+                if now - self._last_1h_refresh >= 900:
                     for asset, state in self.assets.items():
                         fresh_1h = state["history"].load("1h")
                         with self._lock:
@@ -413,8 +451,15 @@ class PaperTrader:
             self.stop("Keyboard interrupt")
 
     def _is_new_day(self) -> bool:
-        # Reset at midnight ET. EDT=UTC-4, EST=UTC-5.
-        # Use UTC-4 year-round — close enough, avoids tzdata dependency.
+        # Returns True exactly once per calendar day (ET), tracking the last reset date.
+        # Robust to heartbeat timing — won't miss midnight if heartbeat skips a window.
         from datetime import timedelta
         now_et = datetime.now(timezone.utc) - timedelta(hours=4)
-        return now_et.hour == 0 and now_et.minute < 15
+        today = now_et.date()
+        if self._last_reset_date is None:
+            self._last_reset_date = today  # Initialize on first call — no reset
+            return False
+        if today != self._last_reset_date:
+            self._last_reset_date = today
+            return True
+        return False

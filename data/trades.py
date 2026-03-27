@@ -226,5 +226,5 @@ class TradeLog:
         ]
         for col in str_cols:
             if col in df.columns:
-                df.loc[:, col] = df[col].astype(object)
+                df[col] = df[col].astype(object)
         return df

@@ -38,8 +38,8 @@ RSI_BEAR = 47         # 1H RSI below this = bearish bias
 RSI_PERIOD = 14
 MOMENTUM_MIN = 0.0005   # Minimum 0.05% price move to be directional
 MOMENTUM_LOOKBACK = 3   # Candles to look back for momentum (3 × 15m = 45 min)
-MACD_MIN = 0            # Minimum absolute MACD histogram for a signal (0 = disabled)
-                        # Note: MACD is in price units — tune per-asset before enabling
+MACD_MIN = 0.0001       # Neutral deadband: histogram must exceed 0.01% of price to count
+                        # Normalized by current price in signals.py so it works across all assets
 MIN_CONFIDENCE = 4    # All 4 signals must agree to enter
 FORCE_TRADE = True    # Data collection mode: majority vote, trades every window
 

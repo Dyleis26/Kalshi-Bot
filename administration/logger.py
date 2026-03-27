@@ -14,11 +14,9 @@ def _setup():
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # --- File handlers ---
-    bot_handler = logging.FileHandler(os.path.join(LOGS_DIR, f"bot_{today}.log"))
-    bot_handler.setFormatter(fmt)
-    bot_handler.setLevel(logging.DEBUG)
-
+    # --- Specific file handlers (trades + errors only) ---
+    # General bot output goes to stdout, captured by systemd → bot.log on VPS,
+    # or printed to terminal during local development. No separate bot_*.log file.
     trade_handler = logging.FileHandler(os.path.join(LOGS_DIR, f"trades_{today}.log"))
     trade_handler.setFormatter(fmt)
     trade_handler.setLevel(logging.INFO)
@@ -27,7 +25,7 @@ def _setup():
     error_handler.setFormatter(fmt)
     error_handler.setLevel(logging.ERROR)
 
-    # --- Console handler ---
+    # --- Console handler (stdout → systemd on VPS, terminal locally) ---
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(fmt)
     console_handler.setLevel(logging.INFO)
@@ -35,7 +33,6 @@ def _setup():
     # --- Root logger ---
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
-    root.addHandler(bot_handler)
     root.addHandler(console_handler)
 
     # --- Trade logger (separate file) ---

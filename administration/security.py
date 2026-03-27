@@ -10,6 +10,7 @@ _killed = threading.Event()
 # Rate limit tracker: max requests per window
 _rate_limits = {
     "kalshi": {"max": 60, "window": 60, "calls": deque()},
+    "kraken": {"max": 15, "window": 60, "calls": deque()},  # Kraken public REST: conservative 15/min
 }
 _rate_lock = threading.Lock()
 

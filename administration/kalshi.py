@@ -156,9 +156,9 @@ class KalshiClient:
         if 0.0 < price < 1.0:
             return round(price, 4)
 
-        # No directional ask — fall back to last traded price
+        # No directional ask — fall back to last traded price (only if meaningful)
         last = float(market.get("last_price_dollars", 0.0))
-        if last > 0.0:
+        if last >= 0.05:
             fair = last if side == "yes" else round(1.0 - last, 4)
             return round(fair, 4)
 

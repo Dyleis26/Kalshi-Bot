@@ -167,7 +167,7 @@ class PaperTrader:
         if direction == NONE:
             return
 
-        t = threading.Thread(target=self._simulate_trade, args=[asset, direction, decision["signals"]])
+        t = threading.Thread(target=self._simulate_trade, args=[asset, direction, decision["signals"], decision["confidence"]])
         t.daemon = True
         t.start()
 
@@ -182,7 +182,7 @@ class PaperTrader:
         self._ticker_cache[asset] = {"ticker": ticker, "ts": now}
         return ticker
 
-    def _simulate_trade(self, asset: str, direction: str, signals: dict):
+    def _simulate_trade(self, asset: str, direction: str, signals: dict, confidence: int = 3):
         kalshi_ticker = self._get_kalshi_ticker(asset)
 
         if not kalshi_ticker:
@@ -226,7 +226,7 @@ class PaperTrader:
             self._release_trade_slot(asset)
             return
 
-        size = self.strategy.size()
+        size = self.strategy.size(confidence)
 
         contracts = math.floor(size / contract_price)
         if contracts < 1:

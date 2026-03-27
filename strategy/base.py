@@ -1,6 +1,6 @@
 import pandas as pd
 from strategy.signals import evaluate
-from administration.config import MIN_CONFIDENCE, KELLY_FRACTION, MAX_BET, MIN_BET, FORCE_TRADE
+from administration.config import MIN_CONFIDENCE, KELLY_FRACTION, MIN_BET, FORCE_TRADE
 from administration.logger import log_signal
 
 
@@ -96,10 +96,17 @@ class Strategy:
     #  Position Sizing                                                     #
     # ------------------------------------------------------------------ #
 
-    def size(self) -> float:
+    def size(self, confidence: int = 3) -> float:
         """
-        Flat $10 per trade during testing.
-        Kelly sizing can be enabled later once real win rate is established.
+        Confidence-based sizing:
+          4-0 all signals agree  → $15 (MAX_BET)
+          3-1 strong majority    → $10 (MIN_BET)
+          2-x tiebreaker         → $5
         """
-        return MIN_BET
+        if confidence >= 4:
+            return MIN_BET * 1.5   # $15
+        elif confidence == 3:
+            return MIN_BET         # $10
+        else:
+            return MIN_BET * 0.5   # $5
 

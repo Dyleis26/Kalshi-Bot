@@ -5,8 +5,9 @@ from administration.config import INTERVALS, CANDLE_LIMIT
 
 STORAGE_DIR = os.path.join(os.path.dirname(__file__), "storage")
 
-# Candles to fetch on catch-up (not full CANDLE_LIMIT — just enough to cover realistic gaps)
-_CATCHUP_LIMIT = 20
+# Candles to fetch on catch-up — covers ~12.5h of 15M candles or ~50h of 1H candles.
+# Raised from 20 (5h) to handle overnight or weekend downtime without data gaps.
+_CATCHUP_LIMIT = 50
 
 
 class History:

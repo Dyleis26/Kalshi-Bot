@@ -152,7 +152,7 @@ class TradeLog:
             "window_close":     round(window_close, 2),
             "window_volume":    round(btc_candle.get("volume", 0), 4),
             "window_move_pct":  move_pct,
-            "window_direction": "up" if move_pct >= 0 else "down",
+            "window_direction": "up" if move_pct > 0 else "down",
             "exit_time":        exit_time.isoformat(),
             "duration_secs":    None,  # computed below under lock
             "result":           result,

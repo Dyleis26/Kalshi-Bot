@@ -6,7 +6,9 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 # --- API Keys ---
-KALSHI_API_KEY = os.getenv("KALSHI_API_KEY")
+KALSHI_API_KEY       = os.getenv("KALSHI_API_KEY")
+CRYPTOPANIC_API_KEY  = os.getenv("CRYPTOPANIC_API_KEY", "")
+NEWSAPI_KEY          = os.getenv("NEWSAPI_KEY", "")
 KALSHI_KEY_PATH = os.getenv(
     "KALSHI_KEY_PATH",
     str(Path(__file__).parent / "kalshi_key.pem")
@@ -64,7 +66,14 @@ LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 
 # --- Kalshi Contract Price Filter ---
 CONTRACT_PRICE_MIN = 0.40   # Don't buy if contract is cheaper than 40¢ (too unlikely)
-CONTRACT_PRICE_MAX = 0.60   # Don't buy if contract is more expensive than 60¢ (too consensus)
+CONTRACT_PRICE_MAX = 0.50   # Don't buy if contract is more expensive than 50¢ (too consensus)
+VWAP_MIN_DISTANCE_PCT = 0.001  # Price must be ≥0.1% away from VWAP to enter
+
+# --- News Context ---
+NEWS_ENABLED         = True    # Toggle the news sentiment filter on/off
+NEWS_MAX_AGE_SECS    = 1800    # Ignore reports older than 30 min
+NEWS_HIGH_CONFIDENCE = 8       # Score threshold for "high" confidence bias
+NEWS_MED_CONFIDENCE  = 3       # Score threshold for "medium" confidence bias
 
 # --- Kalshi Fees ---
 KALSHI_MAKER_FEE = 0.0175   # Maker fee coefficient (limit orders)

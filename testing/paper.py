@@ -9,8 +9,9 @@ from administration.monitor import Monitor
 from administration.discord import Discord
 from administration.config import (
     STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, ASSETS,
-    CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX,
+    CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, NEWS_ENABLED,
 )
+from administration.news import NewsContext
 from administration.kalshi import KalshiClient
 from data.kraken import KrakenFeed
 from data.history import History
@@ -103,6 +104,11 @@ class PaperTrader:
         )
 
         logger.info("Paper trader running. Waiting for signals on BTC, ETH, SOL, XRP, DOGE...")
+
+        # Prime the news context before the first window fires
+        if NEWS_ENABLED:
+            NewsContext.fetch(list(ASSETS.keys()))
+
         self._heartbeat()
 
     def stop(self, reason: str = "Manual stop"):
@@ -234,10 +240,10 @@ class PaperTrader:
             return
 
         actual_cost      = contracts * contract_price
-        fee_entry        = KALSHI_MAKER_FEE * actual_cost * (1 - contract_price)
+        fee_entry        = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)
         total_cost       = round(actual_cost + fee_entry, 2)
-        # Net payout if win = gross - settlement fee (same formula as entry fee)
-        payout           = round(contracts * 1.00 - fee_entry, 2)
+        # Net payout if win = gross - entry fee - settlement fee (both legs)
+        payout           = round(contracts * 1.00 - 2 * fee_entry, 2)
         price_pct        = contract_price * 100
         live_price = self.assets[asset]["price"]
         with self._lock:
@@ -312,14 +318,24 @@ class PaperTrader:
                 return
             # Find the specific settlement candle by its open time rather than blindly using
             # the latest candle (which may already be the NEXT 15M candle due to timing).
+            # Floor to minute to handle any sub-second precision in WS-sourced timestamps.
             last = None
             if settlement_open is not None:
-                target = pd.Timestamp(settlement_open)
-                match = df[df["time"].apply(pd.Timestamp) == target]
+                target = pd.Timestamp(settlement_open).floor("min")
+                df_times = pd.to_datetime(df["time"]).dt.floor("min")
+                match = df[df_times == target]
                 if not match.empty:
                     last = match.iloc[0]
             if last is None:
-                last = df.iloc[-1]  # fallback
+                if settlement_open is not None:
+                    # Fallback: most recent candle at or before settlement_open.
+                    # Avoids accidentally using a future candle if the next window has
+                    # already arrived by the time this timer fires.
+                    target_ts = pd.Timestamp(settlement_open)
+                    past = df[pd.to_datetime(df["time"]) <= target_ts]
+                    last = past.iloc[-1] if not past.empty else df.iloc[-1]
+                else:
+                    last = df.iloc[-1]
             went_up    = last["close"] > last["open"]
             last_candle = last.to_dict()
 
@@ -330,7 +346,7 @@ class PaperTrader:
             win = (direction == LONG and went_up) or (direction == SHORT and not went_up)
 
         actual_cost  = contracts * contract_price
-        fee_one_leg  = KALSHI_MAKER_FEE * actual_cost * (1 - contract_price)
+        fee_one_leg  = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)
         total_cost   = round(actual_cost + fee_one_leg, 2)
         live_price   = state["price"]
         with self._lock:
@@ -436,6 +452,9 @@ class PaperTrader:
                     continue
                 elapsed = 0
                 self.monitor.print_status()
+                # Refresh news context every heartbeat so each window has a fresh report
+                if NEWS_ENABLED:
+                    NewsContext.fetch(list(ASSETS.keys()))
                 # Refresh 1H candles from REST every 15 min (matches heartbeat cadence)
                 # Keeps RSI/MACD trend filter at most ~15 min stale instead of ~60 min
                 now = time.monotonic()

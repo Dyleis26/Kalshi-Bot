@@ -53,7 +53,8 @@ class PaperTrader:
         self.trades_this_hour  = {asset: 0 for asset in ASSETS}
         self.hour_window_start = {asset: time.monotonic() for asset in ASSETS}
 
-        # Kalshi ticker cache (2-minute TTL — 15M markets rotate every 15 min)
+        # Kalshi ticker cache (15s TTL — short so retry loop always gets a fresh ticker
+        # in case the market rolls to the next window during a 30s retry sleep)
         self._ticker_cache: dict = {asset: {"ticker": None, "ts": 0.0} for asset in ASSETS}
 
         # Session stats — reset every time the bot restarts
@@ -105,9 +106,11 @@ class PaperTrader:
 
         logger.info("Paper trader running. Waiting for signals on BTC, ETH, SOL, XRP, DOGE...")
 
-        # Prime the news context before the first window fires
+        # Prime the news context in background so the first window has data
+        # without blocking the main thread during startup
         if NEWS_ENABLED:
-            NewsContext.fetch(list(ASSETS.keys()))
+            t = threading.Thread(target=NewsContext.fetch, args=[list(ASSETS.keys())], daemon=True)
+            t.start()
 
         self._heartbeat()
 
@@ -452,9 +455,11 @@ class PaperTrader:
                     continue
                 elapsed = 0
                 self.monitor.print_status()
-                # Refresh news context every heartbeat so each window has a fresh report
+                # Refresh news context in background — HTTP calls can take up to 20s
+                # and must not block the heartbeat or 1H candle refresh
                 if NEWS_ENABLED:
-                    NewsContext.fetch(list(ASSETS.keys()))
+                    t = threading.Thread(target=NewsContext.fetch, args=[list(ASSETS.keys())], daemon=True)
+                    t.start()
                 # Refresh 1H candles from REST every 15 min (matches heartbeat cadence)
                 # Keeps RSI/MACD trend filter at most ~15 min stale instead of ~60 min
                 now = time.monotonic()

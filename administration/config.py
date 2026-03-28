@@ -59,15 +59,14 @@ PROFIT_TO_CASH = 0.50       # 50% of each profit goes to cash
 # --- Risk ---
 DAILY_LOSS_LIMIT = 1.00     # Data collection: disabled (100% loss required to halt)
 KELLY_FRACTION = 0.20       # Use 20% of full Kelly
-MAX_BET = 50.00             # Hard cap per trade in dollars
-MIN_BET = 10.00             # Minimum trade size in dollars
+MAX_BET = 5.00              # Flat $5 per trade — all trades equal size
+MIN_BET = 5.00              # Matches MAX_BET — no size variation
 MAX_LOSING_STREAK = 999     # Data collection: disabled
 LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 
 # --- Kalshi Contract Price Filter ---
-CONTRACT_PRICE_MIN = 0.40   # Don't buy if contract is cheaper than 40¢ (too unlikely)
-CONTRACT_PRICE_MAX = 0.60   # Don't buy if contract is more expensive than 60¢ (too consensus)
-VWAP_MIN_DISTANCE_PCT = 0.001  # Price must be ≥0.1% away from VWAP to enter
+CONTRACT_PRICE_MIN = 0.05   # Block only truly invalid prices (no real market)
+CONTRACT_PRICE_MAX = 0.95   # Block only truly invalid prices (no real market)
 
 # --- News Context ---
 NEWS_ENABLED         = True    # Toggle the news sentiment filter on/off

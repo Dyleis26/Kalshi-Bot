@@ -1,6 +1,6 @@
 import pandas as pd
 from strategy.signals import evaluate
-from administration.config import MIN_CONFIDENCE, KELLY_FRACTION, MIN_BET, FORCE_TRADE, VWAP_MIN_DISTANCE_PCT, NEWS_ENABLED
+from administration.config import MIN_CONFIDENCE, KELLY_FRACTION, MIN_BET, FORCE_TRADE, NEWS_ENABLED
 from administration.logger import log_signal
 from administration.news import NewsContext
 
@@ -52,9 +52,6 @@ class Strategy:
                 reason = f"Force/majority — bull={bull_count} bear={bear_count}"
             else:
                 # 2-2 tie: use momentum as tiebreaker (most reactive signal).
-                # In a 4-signal 2-2 tie all signals must be directional — a neutral
-                # momentum would produce a 3-1 split, not a tie — so the bear/bull
-                # branches below are exhaustive and the NONE branch is a safety net only.
                 if signals["momentum_bias"] == "bull":
                     direction = LONG
                     reason = f"Force/tie — momentum tiebreaker bull"
@@ -62,8 +59,11 @@ class Strategy:
                     direction = SHORT
                     reason = f"Force/tie — momentum tiebreaker bear"
                 else:
-                    direction = NONE   # Defensive: not reachable with current 4-signal setup
-                    reason = f"Force/tie — no tiebreaker (mom={signals['momentum_bias']} rsi={signals['rsi']:.1f})"
+                    # Final fallback: VWAP side (price above = LONG, below = SHORT).
+                    # Ensures we always produce a direction — never skip a window.
+                    vwap_side = signals["vwap_bias"]
+                    direction = LONG if vwap_side == "bull" else SHORT
+                    reason = f"Force/tie — VWAP fallback ({vwap_side})"
         elif bull_count >= MIN_CONFIDENCE:
             direction = LONG
             reason = "All 4 signals bullish"
@@ -73,20 +73,6 @@ class Strategy:
         else:
             direction = NONE
             reason = f"No confluence — bull={bull_count} bear={bear_count} neutral={biases.count('neutral')}"
-
-        # VWAP filter: direction must align with which side of VWAP price is on,
-        # and price must be far enough from VWAP to have a meaningful edge.
-        if direction != NONE:
-            price = signals["price"]
-            vwap  = signals["vwap"]
-            vwap_diff = price - vwap
-            vwap_distance_pct = abs(vwap_diff) / price if price > 0 else 0
-            vwap_aligned = (direction == LONG and vwap_diff > 0) or \
-                           (direction == SHORT and vwap_diff < 0)
-            if not vwap_aligned or vwap_distance_pct < VWAP_MIN_DISTANCE_PCT:
-                direction = NONE
-                reason = (f"VWAP filter blocked — distance={vwap_distance_pct:.4f} "
-                          f"({'aligned' if vwap_aligned else 'misaligned'})")
 
         # News filter: block trades where high-confidence news directly
         # contradicts the technical direction. Medium/neutral news is logged only.
@@ -124,16 +110,6 @@ class Strategy:
     # ------------------------------------------------------------------ #
 
     def size(self, confidence: int = 3) -> float:
-        """
-        Confidence-based sizing:
-          4-0 all signals agree  → $15 (MAX_BET)
-          3-1 strong majority    → $10 (MIN_BET)
-          2-x tiebreaker         → $5
-        """
-        if confidence >= 4:
-            return MIN_BET * 1.5   # $15
-        elif confidence == 3:
-            return MIN_BET         # $10
-        else:
-            return MIN_BET * 0.5   # $5
+        """Flat $5 per trade — all windows equal size."""
+        return MIN_BET
 

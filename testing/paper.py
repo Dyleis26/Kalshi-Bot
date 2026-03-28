@@ -199,33 +199,45 @@ class PaperTrader:
             self._release_trade_slot(asset)
             return
 
-        side = "yes" if direction == LONG else "no"
-
         # Retry every 30s for up to 14 minutes (window is 15 min; stop before it closes).
-        # Re-fetch ticker each attempt — the market may have rolled to the next window
-        # (Kalshi names markets by settlement time; the old market may still appear
-        # in the series query for a few seconds after the new window opens).
+        # Always fetch BOTH yes and no prices in one call so we can use the live
+        # market probability (yes_ask) to determine the optimal direction.
         retry_start = time.monotonic()
         WINDOW_SECS = 14 * 60  # 14 minutes
         attempt = 0
-        contract_price = 1.0
+        yes_price, no_price = 1.0, 1.0
         while time.monotonic() - retry_start < WINDOW_SECS:
             fresh_ticker = self._get_kalshi_ticker(asset) or kalshi_ticker
-            contract_price = self.kalshi.get_market_price(fresh_ticker, side)
-            if 0.05 <= contract_price <= 0.95:
-                kalshi_ticker = fresh_ticker  # Use the working ticker for settlement
+            yes_price, no_price = self.kalshi.get_market_prices(fresh_ticker)
+            if 0.05 <= yes_price <= 0.95:
+                kalshi_ticker = fresh_ticker
                 break
             attempt += 1
             remaining = WINDOW_SECS - (time.monotonic() - retry_start)
             if remaining < 30:
                 break
-            logger.info(f"{asset}: Kalshi market not yet priced (price={contract_price:.2f}) — retrying in 30s (attempt {attempt})")
+            logger.info(f"{asset}: Kalshi market not yet priced (price={yes_price:.2f}) — retrying in 30s (attempt {attempt})")
             time.sleep(30)
 
-        if contract_price >= 1.0:
+        if not (0.05 <= yes_price <= 0.95):
             logger.info(f"{asset}: no real Kalshi price available — skipping trade")
             self._release_trade_slot(asset)
             return
+
+        # Market alignment: the Kalshi YES ask is a calibrated real-time probability.
+        # yes_ask > 0.50 = market favours UP this window → go LONG.
+        # yes_ask < 0.50 = market favours DOWN this window → go SHORT.
+        # Each asset is priced independently, creating per-asset direction diversity
+        # instead of all 5 following the same lagging technical signal.
+        market_direction = LONG if yes_price >= 0.50 else SHORT
+        if market_direction != direction:
+            logger.info(
+                f"{asset}: market alignment {direction}→{market_direction} "
+                f"(yes={yes_price:.2f})"
+            )
+        direction = market_direction
+        side = "yes" if direction == LONG else "no"
+        contract_price = yes_price if direction == LONG else no_price
 
         if not (CONTRACT_PRICE_MIN <= contract_price <= CONTRACT_PRICE_MAX):
             logger.info(

@@ -165,6 +165,30 @@ class KalshiClient:
 
         return 1.0  # No price data at all — skip trade
 
+    def get_market_prices(self, ticker: str) -> tuple:
+        """
+        Return (yes_ask, no_ask) for a market in a single API call.
+        Used for market-alignment direction: yes_ask > 0.50 means market favours UP.
+        Returns (1.0, 1.0) on any error so callers can treat it as 'no price'.
+        """
+        market = self.get_market(ticker)
+        if not market:
+            return 1.0, 1.0
+
+        yes = float(market.get("yes_ask_dollars", 0.0))
+        no  = float(market.get("no_ask_dollars",  0.0))
+
+        # Fall back to last_price when ask is missing
+        if not (0.0 < yes < 1.0) or not (0.0 < no < 1.0):
+            last = float(market.get("last_price_dollars", 0.0))
+            if last >= 0.05:
+                yes = round(last, 4)
+                no  = round(1.0 - last, 4)
+            else:
+                return 1.0, 1.0
+
+        return round(yes, 4), round(no, 4)
+
     # ------------------------------------------------------------------ #
     #  Orders                                                              #
     # ------------------------------------------------------------------ #

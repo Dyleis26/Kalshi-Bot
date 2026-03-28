@@ -66,7 +66,7 @@ LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 
 # --- Kalshi Contract Price Filter ---
 CONTRACT_PRICE_MIN = 0.40   # Don't buy if contract is cheaper than 40¢ (too unlikely)
-CONTRACT_PRICE_MAX = 0.50   # Don't buy if contract is more expensive than 50¢ (too consensus)
+CONTRACT_PRICE_MAX = 0.60   # Don't buy if contract is more expensive than 60¢ (too consensus)
 VWAP_MIN_DISTANCE_PCT = 0.001  # Price must be ≥0.1% away from VWAP to enter
 
 # --- News Context ---

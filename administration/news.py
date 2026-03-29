@@ -103,7 +103,7 @@ class NewsContext:
                         if post.get("title"):
                             headlines.append(post["title"])
                     sources_used.append("cryptopanic")
-                    logger.debug(f"CryptoPanic: {len(all_posts)} posts received, {passed} within age window")
+                    logger.info(f"CryptoPanic: {len(all_posts)} posts received, {passed} within age window")
                 else:
                     logger.warning(f"CryptoPanic HTTP {resp.status_code}: {resp.text[:200]}")
             except Exception as e:
@@ -150,7 +150,7 @@ class NewsContext:
                         pub_strs = [a.get("publishedAt", "") for a in all_articles if a.get("publishedAt")]
                         if pub_strs:
                             oldest = min(pub_strs)
-                    logger.debug(
+                    logger.info(
                         f"NewsAPI: {len(all_articles)} articles received, {passed} within age window "
                         f"(oldest={oldest}, cutoff={cutoff.isoformat()})"
                     )

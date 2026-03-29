@@ -77,7 +77,7 @@ class NewsContext:
             try:
                 currencies = ",".join(assets)
                 url = (
-                    f"https://cryptopanic.com/api/free/v1/posts/"
+                    f"https://cryptopanic.com/api/developer/v2/posts/"
                     f"?auth_token={CRYPTOPANIC_API_KEY}"
                     f"&currencies={currencies}&public=true"
                 )

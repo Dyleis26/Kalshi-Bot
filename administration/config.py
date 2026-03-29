@@ -84,6 +84,16 @@ NEWS_MAX_AGE_SECS    = 1800    # Ignore reports older than 30 min
 NEWS_HIGH_CONFIDENCE = 8       # Score threshold for "high" confidence bias
 NEWS_MED_CONFIDENCE  = 3       # Score threshold for "medium" confidence bias
 
+# --- Intra-Window Position Management ---
+# Stop-loss: sell the contract immediately if it drops to this value.
+# At 0.25, a NO bought at 0.50 has lost half its value — cut and save the rest.
+STOP_LOSS_PRICE  = 0.25
+
+# Trailing profit: once the contract reaches this value, arm a trailing exit.
+# Any drop below the observed peak triggers an immediate sell to lock profits.
+# At 0.75, we've already won $0.25 on a $0.50 entry — lock it in on any reversal.
+TRAILING_TRIGGER = 0.75
+
 # --- Kalshi Fees ---
 KALSHI_MAKER_FEE = 0.0175   # Maker fee coefficient (limit orders)
 KALSHI_TAKER_FEE = 0.07     # Taker fee coefficient (market orders)

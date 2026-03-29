@@ -11,6 +11,7 @@ from administration.config import (
     STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, ASSETS,
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, NEWS_ENABLED,
     BET_NEAR_FAIR, BET_SLIGHT_LEAN, BET_MOD_LEAN, BET_STRONG_LEAN,
+    STOP_LOSS_PRICE, TRAILING_TRIGGER,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -70,7 +71,8 @@ class PaperTrader:
         self._lock            = threading.Lock()
         self._ready_at        = None
         self._last_reset_date = None   # Tracks last daily reset date (ET) for _is_new_day()
-        self._first_window_done: set = set()  # Assets whose post-restart warmup window has fired
+        self._first_window_done: set = set()   # Assets whose post-restart warmup window has fired
+        self._last_trade_window: dict = {asset: None for asset in ASSETS}  # Last window traded per asset
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
@@ -204,6 +206,18 @@ class PaperTrader:
             self._release_trade_slot(asset)
             return
 
+        # One-trade-per-window: compute the current 15M window boundary and block
+        # re-entry if this asset already has a trade open in this window.
+        _now_cw = datetime.now(timezone.utc)
+        _cw_min = _now_cw.minute - (_now_cw.minute % 15)
+        current_window = _now_cw.replace(minute=_cw_min, second=0, microsecond=0, tzinfo=None)
+        with self._lock:
+            last_window = self._last_trade_window[asset]
+        if last_window == current_window:
+            logger.info(f"{asset}: already traded this window ({current_window.strftime('%H:%M')}) — skipping")
+            self._release_trade_slot(asset)
+            return
+
         kalshi_ticker = self._get_kalshi_ticker(asset)
 
         if not kalshi_ticker:
@@ -328,6 +342,7 @@ class PaperTrader:
         with self._lock:
             self._open_stake = round(self._open_stake + total_cost, 2)
             portfolio_after  = round(self.portfolio.total - self._open_stake, 2)
+            self._last_trade_window[asset] = current_window  # one-trade-per-window
 
         trade_id = self.trade_log.open_trade(
             direction=direction,
@@ -360,21 +375,159 @@ class PaperTrader:
         # Compute the settlement candle's open time and exact seconds until settlement.
         # Fire at the next 15M boundary (not 15 min from now) so we don't poll late
         # when the trade was entered partway through a window.
-        from datetime import datetime as _dt, timezone as _tz
-        _now = _dt.now(_tz.utc)
+        _now = datetime.now(timezone.utc)
         _m = _now.minute - (_now.minute % 15)
         settlement_open = _now.replace(minute=_m, second=0, microsecond=0, tzinfo=None)
         seconds_into_window = (_now.minute % 15) * 60 + _now.second + _now.microsecond / 1e6
         seconds_until_settlement = max(5.0, (15 * 60) - seconds_into_window + 5)  # +5s buffer
 
-        t = threading.Timer(
-            seconds_until_settlement,
-            self._resolve_trade,
+        t = threading.Thread(
+            target=self._monitor_position,
             args=[asset, direction, contracts, contract_price, price_pct, trade_id,
-                  kalshi_ticker, settlement_open]
+                  kalshi_ticker, settlement_open, seconds_until_settlement]
         )
         t.daemon = True  # Dies with the process — no ghost resolutions after restart
         t.start()
+
+    def _monitor_position(self, asset: str, direction: str, contracts: int,
+                          contract_price: float, price_pct: float, trade_id: str,
+                          kalshi_ticker: str, settlement_open, seconds_until_settlement: float):
+        """
+        Poll the Kalshi contract price every 30s after entry and exit early if:
+          - Stop-loss: contract price drops to <= STOP_LOSS_PRICE (default 0.25)
+          - Trailing profit: once contract price >= TRAILING_TRIGGER (default 0.75),
+            sell immediately on any drop back below the observed peak.
+        Falls through to normal Kalshi settlement resolution if neither fires.
+        """
+        side = "yes" if direction == LONG else "no"
+        high_water     = contract_price
+        trailing_armed = False
+        poll_interval  = 30
+        deadline       = time.monotonic() + seconds_until_settlement
+
+        while self.running:
+            remaining = deadline - time.monotonic()
+            if remaining <= poll_interval:
+                # Close enough to settlement — hand off to the resolver
+                if remaining > 0:
+                    time.sleep(remaining)
+                break
+
+            time.sleep(poll_interval)
+
+            fresh_ticker  = self._get_kalshi_ticker(asset) or kalshi_ticker
+            if not fresh_ticker:
+                continue
+            current_price = self.kalshi.get_market_price(fresh_ticker, side)
+
+            # Skip stale/invalid prices (demo API commonly returns 0.0 or 1.0 mid-window)
+            if not (0.05 < current_price < 0.95):
+                continue
+
+            # Update high water mark
+            if current_price > high_water:
+                high_water = current_price
+
+            # Arm trailing profit once the contract has reached the trigger threshold
+            if not trailing_armed and high_water >= TRAILING_TRIGGER:
+                trailing_armed = True
+                logger.info(
+                    f"{asset}: trailing-profit armed — {side.upper()} peaked at {high_water:.2f}"
+                )
+
+            # Trailing profit exit: any drop below the peak locks in gains
+            if trailing_armed and current_price < high_water:
+                logger.info(
+                    f"{asset}: trailing-profit EXIT — peaked {high_water:.2f} → now {current_price:.2f}"
+                )
+                self._exit_early(asset, direction, contracts, contract_price,
+                                 current_price, trade_id, "trailing-profit")
+                return
+
+            # Stop-loss exit: contract lost most of its value — cut remaining risk
+            if current_price <= STOP_LOSS_PRICE:
+                logger.info(
+                    f"{asset}: stop-loss EXIT — {side.upper()} at {current_price:.2f} "
+                    f"(<= {STOP_LOSS_PRICE})"
+                )
+                self._exit_early(asset, direction, contracts, contract_price,
+                                 current_price, trade_id, "stop-loss")
+                return
+
+        if self.running:
+            # No early exit triggered — resolve at Kalshi settlement
+            self._resolve_trade(asset, direction, contracts, contract_price, price_pct,
+                                trade_id, kalshi_ticker, settlement_open)
+
+    def _exit_early(self, asset: str, direction: str, contracts: int,
+                    contract_price: float, exit_price: float,
+                    trade_id: str, reason: str):
+        """
+        Resolve a trade early at exit_price (stop-loss or trailing profit).
+        PnL = sale proceeds − entry cost − entry fee − exit fee.
+        """
+        actual_cost   = contracts * contract_price
+        exit_proceeds = contracts * exit_price
+        fee_entry     = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)
+        fee_exit      = KALSHI_MAKER_FEE * contracts * min(exit_price,     1 - exit_price)
+        fee_paid      = round(fee_entry + fee_exit, 4)
+        pnl           = round(exit_proceeds - actual_cost - fee_paid, 4)
+        win           = pnl > 0
+        total_cost    = round(actual_cost + fee_entry, 2)
+        live_price    = self.assets[asset]["price"]
+
+        with self._lock:
+            self._open_stake = max(0.0, round(self._open_stake - total_cost, 2))
+            df = self.assets[asset]["df_15m"]
+            last_candle = df.iloc[-1].to_dict() if not df.empty else {}
+
+        if win:
+            with self._lock:
+                self.session_wins += 1
+                self.session_pnl   = round(self.session_pnl + pnl, 4)
+                self.portfolio.record_win(pnl)
+                s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
+                port_total   = self.portfolio.total
+                port_summary = self.portfolio.summary()
+            log_trade(direction, live_price, actual_cost, result="win", pnl=pnl)
+            self.monitor.record_trade_result("win")
+            self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
+            self.discord.sell_win(
+                direction=direction, contracts=contracts, contracts_filled=contracts,
+                price_pct=exit_price * 100, pnl=pnl, portfolio_total=port_total,
+                asset=asset, session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
+            )
+        else:
+            with self._lock:
+                self.session_losses += 1
+                self.session_pnl     = round(self.session_pnl + pnl, 4)
+                self.portfolio.record_loss(abs(pnl))
+                s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
+                port_total   = self.portfolio.total
+                port_summary = self.portfolio.summary()
+            log_trade(direction, live_price, actual_cost, result="loss", pnl=pnl)
+            self.monitor.record_trade_result("loss")
+            self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
+            self.discord.sell_loss(
+                direction=direction, contracts=contracts, contracts_filled=contracts,
+                price_pct=exit_price * 100, pnl=pnl, portfolio_total=port_total,
+                asset=asset, session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
+            )
+
+        logger.info(
+            f"{asset}: {reason} | exit={exit_price:.2f} entry={contract_price:.2f} | pnl=${pnl:+.2f}"
+        )
+
+        with self._lock:
+            can_trade = self.portfolio.can_trade()
+            port_halt = self.portfolio.total
+        if not FORCE_TRADE and not can_trade:
+            halt_reason = "Daily loss limit reached"
+            log_halt(halt_reason)
+            self.monitor.set_halt(True, halt_reason)
+            if not self._stopped:
+                self._stopped = True
+                self.discord.bot_stopped(port_halt)
 
     def _resolve_trade(self, asset: str, direction: str, contracts: int,
                        contract_price: float, price_pct: float,

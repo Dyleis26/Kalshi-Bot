@@ -195,7 +195,7 @@ class KalshiClient:
 
     def place_limit_order(self, ticker: str, side: str, count: int, price_cents: int) -> dict:
         """
-        Place a limit order on Kalshi.
+        Place a limit buy order on Kalshi.
 
         Args:
             ticker:       Market ticker (e.g. 'KXBTC-15M-...')
@@ -220,6 +220,60 @@ class KalshiClient:
         except Exception as e:
             log_error(f"Failed to place limit order on {ticker}", e)
             return None
+
+    def sell_position(self, ticker: str, side: str, count: int, price_cents: int) -> dict | None:
+        """
+        Sell (exit) contracts already held in a position.
+
+        Args:
+            ticker:       Market ticker
+            side:         'yes' or 'no' — the side we own
+            count:        Number of contracts to sell
+            price_cents:  Minimum sell price in cents (1-99). Use a low value (e.g. 1)
+                          to guarantee a fill on stop-loss; use current market price for
+                          trailing-profit exits where we want a fair execution.
+
+        Returns:
+            Order dict from Kalshi API or None on failure
+        """
+        try:
+            body = {
+                "ticker": ticker,
+                "action": "sell",
+                "side": side,
+                "type": "limit",
+                "count": count,
+                "limit_price": price_cents,
+            }
+            result = self._post("/orders", body)
+            return result.get("order")
+        except Exception as e:
+            log_error(f"Failed to place sell order on {ticker}", e)
+            return None
+
+    def wait_for_fill(self, order_id: str, timeout_secs: int = None) -> dict | None:
+        """
+        Poll until an order is fully executed or the timeout is exceeded.
+        Cancels the order if it has not filled by the deadline.
+
+        Returns the filled order dict, or None if canceled/timeout.
+        """
+        from administration.config import ORDER_TIMEOUT_SECS
+        if timeout_secs is None:
+            timeout_secs = ORDER_TIMEOUT_SECS
+        deadline = time.monotonic() + timeout_secs
+        while time.monotonic() < deadline:
+            order = self.get_order(order_id)
+            if not order:
+                return None
+            status = order.get("status")
+            if status == "executed":
+                return order
+            if status == "canceled":
+                return None
+            time.sleep(5)
+        self.cancel_order(order_id)
+        return None
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an open order. Returns True on success."""

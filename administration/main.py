@@ -2,7 +2,8 @@
 main.py — Entry point for the Kalshi BTC 15M bot.
 
 Modes:
-  python -m administration.main paper      → Paper trade (default)
+  python -m administration.main paper      → Paper trade on Kalshi demo (default)
+  python -m administration.main live       → Live trade with real money on Kalshi
   python -m administration.main backtest   → Run backtest on historical data
   python -m administration.main optimize   → Run RBI optimizer
 """
@@ -35,12 +36,24 @@ def _acquire_pid_lock():
 
 
 def run_paper():
-    from testing.paper import PaperTrader
-    trader = PaperTrader()
+    from testing.paper import Trader
+    trader = Trader(live=False)
     try:
         trader.start()
     except Exception as e:
         log_error("Paper trader crashed", e)
+        trader.stop("Crash")
+        kill()
+        raise
+
+
+def run_live():
+    from testing.paper import Trader
+    trader = Trader(live=True)
+    try:
+        trader.start()
+    except Exception as e:
+        log_error("Live trader crashed", e)
         trader.stop("Crash")
         kill()
         raise
@@ -93,13 +106,16 @@ def main():
     if mode == "paper":
         _acquire_pid_lock()
         run_paper()
+    elif mode == "live":
+        _acquire_pid_lock()
+        run_live()
     elif mode == "backtest":
         run_backtest()
     elif mode == "optimize":
         run_optimizer()
     else:
         print(f"Unknown mode: {mode}")
-        print("Usage: python -m administration.main [paper|backtest|optimize]")
+        print("Usage: python -m administration.main [paper|live|backtest|optimize]")
         sys.exit(1)
 
 

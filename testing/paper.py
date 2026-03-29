@@ -24,20 +24,24 @@ from administration.logger import get as get_logger, log_trade, log_halt
 logger = get_logger("paper")
 
 
-class PaperTrader:
+class Trader:
     """
-    Simulated live trading across 5 crypto assets using real Kraken price data.
+    Live and paper trading across 5 crypto assets using real Kraken price data.
     Each asset runs independently with its own data, signals, and trade resolution.
+
+    live=False  → paper mode: simulates orders, uses Kalshi demo API for market data
+    live=True   → live mode:  places real orders on Kalshi, syncs balance at startup
     """
 
-    def __init__(self, starting_balance: float = STARTING_BALANCE):
+    def __init__(self, live: bool = False, starting_balance: float = STARTING_BALANCE):
+        self.live      = live
         self.portfolio = Portfolio(starting_balance)
         self.strategy  = Strategy()
         self.feed      = KrakenFeed()
         self.monitor   = Monitor()
-        self.discord   = Discord(paper=True)
-        self.trade_log = TradeLog(mode="paper")
-        self.kalshi = KalshiClient(paper=True)   # demo — ticker discovery & settlement
+        self.discord   = Discord(paper=not live)
+        self.trade_log = TradeLog(mode="live" if live else "paper")
+        self.kalshi    = KalshiClient(paper=not live)
 
         # Per-asset state: dataframes, live price, history manager
         # All History instances share the same KrakenFeed (REST calls only — thread-safe)
@@ -78,8 +82,19 @@ class PaperTrader:
     # ------------------------------------------------------------------ #
 
     def start(self):
-        logger.info("Paper trader starting (5 assets)...")
+        mode_str = "LIVE" if self.live else "paper"
+        logger.info(f"Trader starting [{mode_str}] (5 assets)...")
         self.discord.start()
+
+        # In live mode: sync portfolio balance from the real Kalshi account.
+        # Ensures we're sizing bets against our actual available funds.
+        if self.live:
+            live_balance = self.kalshi.get_balance()
+            if live_balance > 0:
+                self.portfolio = Portfolio(live_balance)
+                logger.info(f"Live mode: synced Kalshi balance — ${live_balance:.2f}")
+            else:
+                logger.warning("Live mode: could not fetch Kalshi balance — using STARTING_BALANCE")
 
         # Fresh start — wipe trades from any previous session
         self.trade_log.reset()
@@ -194,7 +209,7 @@ class PaperTrader:
         if direction == NONE:
             return
 
-        t = threading.Thread(target=self._simulate_trade, args=[asset, direction, decision["signals"], decision["confidence"]])
+        t = threading.Thread(target=self._execute_trade, args=[asset, direction, decision["signals"], decision["confidence"]])
         t.daemon = True
         t.start()
 
@@ -209,7 +224,7 @@ class PaperTrader:
         self._ticker_cache[asset] = {"ticker": ticker, "ts": now}
         return ticker
 
-    def _simulate_trade(self, asset: str, direction: str, signals: dict, confidence: int = 3):
+    def _execute_trade(self, asset: str, direction: str, signals: dict, confidence: int = 3):
         # One-trade-per-window: compute the current 15M window boundary and block
         # re-entry if this asset already has a trade open in this window.
         _now_cw = datetime.now(timezone.utc)
@@ -336,6 +351,31 @@ class PaperTrader:
             self._release_trade_slot(asset)
             return
 
+        # --- Live order placement ---
+        # Paper mode skips this block and assumes a perfect fill at contract_price.
+        # Live mode places a real limit order and waits for fill confirmation.
+        contracts_filled = contracts
+        if self.live:
+            order = self.kalshi.place_limit_order(
+                kalshi_ticker, side, contracts,
+                price_cents=round(contract_price * 100),
+            )
+            if not order:
+                logger.error(f"{asset}: order placement failed — skipping")
+                self._release_trade_slot(asset)
+                return
+            filled_order = self.kalshi.wait_for_fill(order["order_id"])
+            if not filled_order:
+                logger.warning(f"{asset}: order expired unfilled — skipping")
+                self._release_trade_slot(asset)
+                return
+            contracts_filled = filled_order.get("filled_count", contracts)
+            if contracts_filled < 1:
+                logger.warning(f"{asset}: zero contracts filled — skipping")
+                self._release_trade_slot(asset)
+                return
+            contracts = contracts_filled
+
         actual_cost      = contracts * contract_price
         fee_entry        = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)
         total_cost       = round(actual_cost + fee_entry, 2)
@@ -351,7 +391,7 @@ class PaperTrader:
         trade_id = self.trade_log.open_trade(
             direction=direction,
             contracts=contracts,
-            contracts_filled=contracts,   # paper: always fully filled; live: use order response
+            contracts_filled=contracts_filled,
             contract_price_pct=price_pct,
             cost=total_cost,
             possible_payout=payout,
@@ -445,7 +485,8 @@ class PaperTrader:
                     f"{asset}: trailing-profit EXIT — peaked {high_water:.2f} → now {current_price:.2f}"
                 )
                 self._exit_early(asset, direction, contracts, contract_price,
-                                 current_price, trade_id, "trailing-profit")
+                                 current_price, trade_id, "trailing-profit",
+                                 kalshi_ticker=fresh_ticker)
                 return
 
             # Stop-loss exit: contract lost most of its value — cut remaining risk
@@ -455,7 +496,8 @@ class PaperTrader:
                     f"(<= {STOP_LOSS_PRICE})"
                 )
                 self._exit_early(asset, direction, contracts, contract_price,
-                                 current_price, trade_id, "stop-loss")
+                                 current_price, trade_id, "stop-loss",
+                                 kalshi_ticker=fresh_ticker)
                 return
 
         if self.running:
@@ -465,11 +507,24 @@ class PaperTrader:
 
     def _exit_early(self, asset: str, direction: str, contracts: int,
                     contract_price: float, exit_price: float,
-                    trade_id: str, reason: str):
+                    trade_id: str, reason: str, kalshi_ticker: str = None):
         """
         Resolve a trade early at exit_price (stop-loss or trailing profit).
         PnL = sale proceeds − entry cost − entry fee − exit fee.
+
+        In live mode: places a real sell order before recording the result.
+        Stop-loss uses an aggressive price (1 cent) to guarantee a fill.
+        Trailing-profit uses the observed exit price for a fair execution.
         """
+        # --- Live sell order ---
+        if self.live and kalshi_ticker:
+            side = "yes" if direction == LONG else "no"
+            if reason == "stop-loss":
+                sell_cents = 1  # Guarantee fill — we're cutting losses, price is irrelevant
+            else:
+                sell_cents = max(1, round(exit_price * 100))
+            self.kalshi.sell_position(kalshi_ticker, side, contracts, sell_cents)
+
         actual_cost   = contracts * contract_price
         exit_proceeds = contracts * exit_price
         fee_entry     = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)

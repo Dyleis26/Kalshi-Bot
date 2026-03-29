@@ -12,7 +12,7 @@ from administration.config import (
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, NEWS_ENABLED,
     BET_NEAR_FAIR, BET_SLIGHT_LEAN, BET_MOD_LEAN, BET_STRONG_LEAN,
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
-    MAX_SAME_DIRECTION, SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
+    SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -79,10 +79,9 @@ class Trader:
         self._last_trade_window: dict = {asset: None for asset in ASSETS}  # Last window traded per asset
 
         # Correlated-sweep protection
-        self._consec_losses:    dict = {asset: 0 for asset in ASSETS}  # consecutive losses per asset
-        self._window_dir_count: dict = {}   # {(window, direction): count} — same-direction cap
-        self._tracked_windows:  dict = {}   # {settlement_open: {"wins": N, "losses": N}}
-        self._sweep_cooloff_window    = None  # skip trades in this window after sweep loss
+        self._consec_losses:   dict = {asset: 0 for asset in ASSETS}  # consecutive losses per asset
+        self._tracked_windows: dict = {}   # {settlement_open: {"wins": N, "losses": N}}
+        self._sweep_cooloff_window   = None  # skip trades in this window after sweep loss
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
@@ -375,20 +374,6 @@ class Trader:
                 f"{asset}: cooldown active ({consec} consecutive losses) — "
                 f"bet reduced to ${size:.2f}"
             )
-
-        # Same-direction cap: at most MAX_SAME_DIRECTION bets per direction per window.
-        # Prevents all-or-nothing correlated sweeps when every asset fires the same signal.
-        dir_key = (current_window, direction)
-        with self._lock:
-            same_count = self._window_dir_count.get(dir_key, 0)
-            if same_count >= MAX_SAME_DIRECTION:
-                logger.info(
-                    f"{asset}: {direction.upper()} cap reached "
-                    f"({MAX_SAME_DIRECTION}/window) — skipping"
-                )
-                self._release_trade_slot(asset)
-                return
-            self._window_dir_count[dir_key] = same_count + 1
 
         contracts = math.floor(size / contract_price)
         if contracts < 1:

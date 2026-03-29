@@ -64,12 +64,13 @@ MIN_BET = 3.00              # Kelly floor — market very confident (YES outside
 MAX_LOSING_STREAK = 999     # Data collection: disabled
 LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 
-# --- Kelly-Optimal Sizing Tiers (based on contract price distance from 0.50) ---
-# Bet more when YES is near 0.50 (best EV zone), less when market is confident.
-BET_NEAR_FAIR   = 10.00   # YES 0.45–0.55: highest EV, best edge zone
-BET_SLIGHT_LEAN =  7.00   # YES 0.40–0.60: decent EV
-BET_MOD_LEAN    =  5.00   # YES 0.35–0.65: marginal EV
-BET_STRONG_LEAN =  3.00   # YES outside 0.35–0.65: market confident, floor bet
+# --- Bet Sizing (two tiers) ---
+# $10 when YES is within 10 cents of 0.50 (genuine uncertainty zone)
+# $5 when YES is 0.35–0.40 or 0.60–0.65 (market leaning but still tradeable)
+BET_NEAR_FAIR   = 10.00   # YES 0.40–0.60: best EV zone
+BET_SLIGHT_LEAN = 10.00   # (same as near-fair — merged into $10 tier)
+BET_MOD_LEAN    =  5.00   # YES 0.35–0.65: market leaning, smaller bet
+BET_STRONG_LEAN =  5.00   # (same as mod-lean — merged into $5 tier)
 
 # --- Kalshi Contract Price Filter (near-fair zone) ---
 # Only trade when YES is in this range — outside it the payout asymmetry makes
@@ -97,7 +98,6 @@ TRAILING_TRIGGER = 0.75
 TRAILING_BUFFER  = 0.05   # Require 5-cent drop from peak before exiting
 
 # --- Correlated-sweep protection ---
-MAX_SAME_DIRECTION    = 3     # Max simultaneous bets in the same direction per 15m window
 SWEEP_COOLOFF_LOSSES  = 3     # Losses in one window that trigger a 1-window cooloff
 CONSEC_LOSS_THRESHOLD = 2     # Consecutive losses on one asset before bet reduction kicks in
 CONSEC_LOSS_REDUCTION = 0.50  # Bet multiplier when asset is on a losing streak

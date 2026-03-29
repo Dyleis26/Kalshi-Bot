@@ -44,7 +44,7 @@ SLOTS = {
     "WEATHER": {
         "type":       "weather",
         "label":      "Weather",
-        "series":     "KXHIGH",      # Kalshi high-temperature series prefix
+        "series":     "HIGH",         # Kalshi high-temperature series prefix
         "city":       "New York City",
         "lat":        40.7128,
         "lng":        -74.0060,
@@ -52,19 +52,19 @@ SLOTS = {
     "MLB": {
         "type":       "sports",
         "label":      "MLB",
-        "series":     "KXMLB",       # Kalshi MLB game-winner series prefix
+        "series":     "MLB",          # Kalshi MLB game-winner series prefix
         "espn_sport": "baseball/mlb",
     },
     "NBA": {
         "type":       "sports",
         "label":      "NBA",
-        "series":     "KXNBA",       # Kalshi NBA game-winner series prefix
+        "series":     "NBA",          # Kalshi NBA game-winner series prefix
         "espn_sport": "basketball/nba",
     },
     "NHL": {
         "type":       "sports",
         "label":      "NHL",
-        "series":     "KXNHL",       # Kalshi NHL game-winner series prefix
+        "series":     "NHL",          # Kalshi NHL game-winner series prefix
         "espn_sport": "hockey/nhl",
     },
 }

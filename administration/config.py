@@ -87,7 +87,7 @@ NEWS_MED_CONFIDENCE  = 3       # Score threshold for "medium" confidence bias
 # --- Intra-Window Position Management ---
 # Stop-loss: sell the contract immediately if it drops to this value.
 # At 0.25, a NO bought at 0.50 has lost half its value — cut and save the rest.
-STOP_LOSS_PRICE  = 0.25
+STOP_LOSS_PRICE  = 0.33   # Tightened from 0.25 — cuts failed contrarian bets earlier
 
 # Trailing profit: once the contract reaches this value, arm a trailing exit.
 # Exits when the price drops TRAILING_BUFFER cents below the observed peak.
@@ -95,6 +95,12 @@ STOP_LOSS_PRICE  = 0.25
 # to 0.74 then recovers — without buffer we'd exit; with buffer we stay in).
 TRAILING_TRIGGER = 0.75
 TRAILING_BUFFER  = 0.05   # Require 5-cent drop from peak before exiting
+
+# --- Correlated-sweep protection ---
+MAX_SAME_DIRECTION    = 3     # Max simultaneous bets in the same direction per 15m window
+SWEEP_COOLOFF_LOSSES  = 3     # Losses in one window that trigger a 1-window cooloff
+CONSEC_LOSS_THRESHOLD = 2     # Consecutive losses on one asset before bet reduction kicks in
+CONSEC_LOSS_REDUCTION = 0.50  # Bet multiplier when asset is on a losing streak
 
 # --- Kalshi Fees ---
 KALSHI_MAKER_FEE = 0.0175   # Maker fee coefficient (limit orders)

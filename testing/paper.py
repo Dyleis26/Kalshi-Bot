@@ -3,7 +3,7 @@ import math
 import signal
 import threading
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from administration.portfolio import Portfolio
 from administration.monitor import Monitor
 from administration.discord import Discord
@@ -12,6 +12,7 @@ from administration.config import (
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, NEWS_ENABLED,
     BET_NEAR_FAIR, BET_SLIGHT_LEAN, BET_MOD_LEAN, BET_STRONG_LEAN,
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
+    MAX_SAME_DIRECTION, SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -76,6 +77,12 @@ class Trader:
         self._ready_at        = None
         self._last_reset_date = None   # Tracks last daily reset date (ET) for _is_new_day()
         self._last_trade_window: dict = {asset: None for asset in ASSETS}  # Last window traded per asset
+
+        # Correlated-sweep protection
+        self._consec_losses:    dict = {asset: 0 for asset in ASSETS}  # consecutive losses per asset
+        self._window_dir_count: dict = {}   # {(window, direction): count} — same-direction cap
+        self._tracked_windows:  dict = {}   # {settlement_open: {"wins": N, "losses": N}}
+        self._sweep_cooloff_window    = None  # skip trades in this window after sweep loss
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
@@ -176,6 +183,19 @@ class Trader:
         if not FORCE_TRADE and not self.portfolio.can_trade():
             return
         if not self._within_trade_limit(asset):
+            return
+
+        # Sweep-loss cooloff: skip one window after SWEEP_COOLOFF_LOSSES+ simultaneous losses.
+        # Lagging indicators stay wrong for a full window after a hard reversal —
+        # sitting out one window costs little but avoids the worst signal-lag trades.
+        _ev_now = datetime.now(timezone.utc)
+        _ev_min = _ev_now.minute - (_ev_now.minute % 15)
+        eval_window = _ev_now.replace(minute=_ev_min, second=0, microsecond=0, tzinfo=None)
+        with self._lock:
+            cooloff = self._sweep_cooloff_window
+        if cooloff is not None and eval_window <= cooloff:
+            logger.info(f"{asset}: sweep-loss cooloff active — skipping {eval_window.strftime('%H:%M')} window")
+            self._release_trade_slot(asset)
             return
 
         state = self.assets[asset]
@@ -345,6 +365,30 @@ class Trader:
             size = BET_MOD_LEAN       # YES 0.35–0.65
         else:
             size = BET_STRONG_LEAN    # YES outside 0.35–0.65
+
+        # Per-asset cooldown: halve bet when this asset is on a losing streak.
+        with self._lock:
+            consec = self._consec_losses[asset]
+        if consec >= CONSEC_LOSS_THRESHOLD:
+            size = round(size * CONSEC_LOSS_REDUCTION, 2)
+            logger.info(
+                f"{asset}: cooldown active ({consec} consecutive losses) — "
+                f"bet reduced to ${size:.2f}"
+            )
+
+        # Same-direction cap: at most MAX_SAME_DIRECTION bets per direction per window.
+        # Prevents all-or-nothing correlated sweeps when every asset fires the same signal.
+        dir_key = (current_window, direction)
+        with self._lock:
+            same_count = self._window_dir_count.get(dir_key, 0)
+            if same_count >= MAX_SAME_DIRECTION:
+                logger.info(
+                    f"{asset}: {direction.upper()} cap reached "
+                    f"({MAX_SAME_DIRECTION}/window) — skipping"
+                )
+                self._release_trade_slot(asset)
+                return
+            self._window_dir_count[dir_key] = same_count + 1
 
         contracts = math.floor(size / contract_price)
         if contracts < 1:
@@ -549,6 +593,7 @@ class Trader:
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
+                self._consec_losses[asset] = 0
             log_trade(direction, live_price, actual_cost, result="win", pnl=pnl)
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
@@ -565,6 +610,7 @@ class Trader:
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
+                self._consec_losses[asset] = min(self._consec_losses[asset] + 1, 10)
             log_trade(direction, live_price, actual_cost, result="loss", pnl=pnl)
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
@@ -656,6 +702,11 @@ class Trader:
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total = self.portfolio.total
                 port_summary = self.portfolio.summary()
+                self._consec_losses[asset] = 0
+                if settlement_open is not None:
+                    self._tracked_windows.setdefault(
+                        settlement_open, {"wins": 0, "losses": 0}
+                    )["wins"] += 1
             log_trade(direction, live_price, actual_cost, result="win", pnl=pnl)
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
@@ -682,6 +733,25 @@ class Trader:
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total = self.portfolio.total
                 port_summary = self.portfolio.summary()
+                self._consec_losses[asset] = min(self._consec_losses[asset] + 1, 10)
+                if settlement_open is not None:
+                    _wr = self._tracked_windows.setdefault(
+                        settlement_open, {"wins": 0, "losses": 0}
+                    )
+                    _wr["losses"] += 1
+                    if _wr["losses"] >= SWEEP_COOLOFF_LOSSES:
+                        _next_w = settlement_open + timedelta(minutes=15)
+                        if self._sweep_cooloff_window is None or _next_w > self._sweep_cooloff_window:
+                            self._sweep_cooloff_window = _next_w
+                            logger.info(
+                                f"Sweep-loss cooloff: {_wr['losses']} losses in "
+                                f"{settlement_open.strftime('%H:%M')} window — "
+                                f"skipping {_next_w.strftime('%H:%M')} window"
+                            )
+                    # Prune entries older than 30 min to prevent unbounded growth
+                    _cutoff = settlement_open - timedelta(minutes=30)
+                    for _k in [k for k in self._tracked_windows if k < _cutoff]:
+                        del self._tracked_windows[_k]
             log_trade(direction, live_price, actual_cost, result="loss", pnl=pnl)
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
@@ -766,7 +836,6 @@ class Trader:
     def _is_new_day(self) -> bool:
         # Returns True exactly once per calendar day (ET), tracking the last reset date.
         # Robust to heartbeat timing — won't miss midnight if heartbeat skips a window.
-        from datetime import timedelta
         now_et = datetime.now(timezone.utc) - timedelta(hours=4)
         today = now_et.date()
         if self._last_reset_date is None:

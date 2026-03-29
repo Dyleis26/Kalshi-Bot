@@ -347,7 +347,7 @@ class PaperTrader:
             last = None
             if settlement_open is not None:
                 target = pd.Timestamp(settlement_open).floor("min")
-                df_times = pd.to_datetime(df["time"]).dt.floor("min")
+                df_times = pd.to_datetime(df["time"], format="mixed").dt.floor("min")
                 match = df[df_times == target]
                 if not match.empty:
                     last = match.iloc[0]
@@ -357,7 +357,7 @@ class PaperTrader:
                     # Avoids accidentally using a future candle if the next window has
                     # already arrived by the time this timer fires.
                     target_ts = pd.Timestamp(settlement_open)
-                    past = df[pd.to_datetime(df["time"]) <= target_ts]
+                    past = df[pd.to_datetime(df["time"], format="mixed") <= target_ts]
                     last = past.iloc[-1] if not past.empty else df.iloc[-1]
                 else:
                     last = df.iloc[-1]

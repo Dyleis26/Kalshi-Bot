@@ -71,7 +71,6 @@ class PaperTrader:
         self._lock            = threading.Lock()
         self._ready_at        = None
         self._last_reset_date = None   # Tracks last daily reset date (ET) for _is_new_day()
-        self._first_window_done: set = set()   # Assets whose post-restart warmup window has fired
         self._last_trade_window: dict = {asset: None for asset in ASSETS}  # Last window traded per asset
 
     # ------------------------------------------------------------------ #
@@ -98,7 +97,7 @@ class PaperTrader:
 
         self.discord.bot_started(self.portfolio.total)
         self.running   = True
-        self._ready_at = time.monotonic() + 60  # 1-minute warmup
+        self._ready_at = time.monotonic() + 10  # 10s — enough for WebSocket connect + backfill
 
         # Graceful shutdown on SIGTERM (e.g. kill, systemd, task runner)
         signal.signal(signal.SIGTERM, lambda s, f: self.stop("SIGTERM"))
@@ -168,6 +167,21 @@ class PaperTrader:
         if len(state["df_1h"]) < 35 or len(state["df_15m"]) < 10:
             return
 
+        # Data freshness check: don't trade on stale candles.
+        # load_all() fetches current data on startup, so this should always pass.
+        # Guards against edge cases where REST fetch lagged or CSV was very old.
+        try:
+            latest_candle_time = pd.to_datetime(
+                state["df_15m"]["time"].iloc[-1], format="mixed"
+            )
+            if latest_candle_time.tzinfo is None:
+                latest_candle_time = latest_candle_time.replace(tzinfo=timezone.utc)
+            age_minutes = (datetime.now(timezone.utc) - latest_candle_time).total_seconds() / 60
+            if age_minutes > 30:
+                return  # Data too stale — wait for next live candle
+        except Exception:
+            return
+
         with self._lock:
             decision = self.strategy.decide(
                 state["df_1h"].copy(),
@@ -196,16 +210,6 @@ class PaperTrader:
         return ticker
 
     def _simulate_trade(self, asset: str, direction: str, signals: dict, confidence: int = 3):
-        # First-window warmup: skip the very first 15M signal after bot restart.
-        # RSI/MACD are calculated on historical candles so they're valid immediately,
-        # but the first live candle can carry backfill noise. One skipped window is
-        # worth ~$25-30 in avoided losses per restart based on observed session data.
-        if asset not in self._first_window_done:
-            self._first_window_done.add(asset)
-            logger.info(f"{asset}: skipping first window after restart (signal warmup)")
-            self._release_trade_slot(asset)
-            return
-
         # One-trade-per-window: compute the current 15M window boundary and block
         # re-entry if this asset already has a trade open in this window.
         _now_cw = datetime.now(timezone.utc)

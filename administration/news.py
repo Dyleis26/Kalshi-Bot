@@ -83,13 +83,16 @@ class NewsContext:
                 )
                 resp = requests.get(url, timeout=10)
                 if resp.status_code == 200:
-                    for post in resp.json().get("results", []):
+                    all_posts = resp.json().get("results", [])
+                    passed = 0
+                    for post in all_posts:
                         pub_str = post.get("published_at", "")
                         if not pub_str:
                             continue
                         pub = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
                         if pub < cutoff:
                             continue
+                        passed += 1
                         # Community votes give direct signal strength
                         votes = post.get("votes", {})
                         post_score = votes.get("positive", 0) - votes.get("negative", 0)
@@ -100,8 +103,9 @@ class NewsContext:
                         if post.get("title"):
                             headlines.append(post["title"])
                     sources_used.append("cryptopanic")
+                    logger.debug(f"CryptoPanic: {len(all_posts)} posts received, {passed} within age window")
                 else:
-                    logger.warning(f"CryptoPanic HTTP {resp.status_code}")
+                    logger.warning(f"CryptoPanic HTTP {resp.status_code}: {resp.text[:200]}")
             except Exception as e:
                 logger.warning(f"CryptoPanic fetch failed: {e}")
 
@@ -117,14 +121,18 @@ class NewsContext:
                     f"&language=en&apiKey={NEWSAPI_KEY}"
                 )
                 resp = requests.get(url, timeout=10)
+                data = resp.json()
                 if resp.status_code == 200:
-                    for article in resp.json().get("articles", []):
+                    all_articles = data.get("articles", [])
+                    passed = 0
+                    for article in all_articles:
                         pub_str = article.get("publishedAt", "")
                         if not pub_str:
                             continue
                         pub = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
                         if pub < cutoff:
                             continue
+                        passed += 1
                         title = (article.get("title") or "").lower()
                         desc  = (article.get("description") or "").lower()
                         text  = title + " " + desc
@@ -136,8 +144,20 @@ class NewsContext:
                         if article.get("title"):
                             headlines.append(article["title"])
                     sources_used.append("newsapi")
+                    # Log diagnostic info to diagnose 0-headline issues
+                    oldest = None
+                    if all_articles:
+                        pub_strs = [a.get("publishedAt", "") for a in all_articles if a.get("publishedAt")]
+                        if pub_strs:
+                            oldest = min(pub_strs)
+                    logger.debug(
+                        f"NewsAPI: {len(all_articles)} articles received, {passed} within age window "
+                        f"(oldest={oldest}, cutoff={cutoff.isoformat()})"
+                    )
+                    if len(all_articles) == 0:
+                        logger.warning(f"NewsAPI returned 0 articles — status={data.get('status')} msg={data.get('message', 'none')}")
                 else:
-                    logger.warning(f"NewsAPI HTTP {resp.status_code}")
+                    logger.warning(f"NewsAPI HTTP {resp.status_code}: {data.get('message', resp.text[:200])}")
             except Exception as e:
                 logger.warning(f"NewsAPI fetch failed: {e}")
 

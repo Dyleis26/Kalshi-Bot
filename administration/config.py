@@ -80,7 +80,7 @@ CONTRACT_PRICE_MAX = 0.65
 
 # --- News Context ---
 NEWS_ENABLED         = True    # Toggle the news sentiment filter on/off
-NEWS_MAX_AGE_SECS    = 1800    # Ignore reports older than 30 min
+NEWS_MAX_AGE_SECS    = 3600    # Ignore reports older than 60 min (increased from 30 — crypto news stays relevant longer)
 NEWS_HIGH_CONFIDENCE = 8       # Score threshold for "high" confidence bias
 NEWS_MED_CONFIDENCE  = 3       # Score threshold for "medium" confidence bias
 
@@ -90,9 +90,11 @@ NEWS_MED_CONFIDENCE  = 3       # Score threshold for "medium" confidence bias
 STOP_LOSS_PRICE  = 0.25
 
 # Trailing profit: once the contract reaches this value, arm a trailing exit.
-# Any drop below the observed peak triggers an immediate sell to lock profits.
-# At 0.75, we've already won $0.25 on a $0.50 entry — lock it in on any reversal.
+# Exits when the price drops TRAILING_BUFFER cents below the observed peak.
+# Buffer prevents premature exits on single-poll noise (e.g. armed at 0.75, dips
+# to 0.74 then recovers — without buffer we'd exit; with buffer we stay in).
 TRAILING_TRIGGER = 0.75
+TRAILING_BUFFER  = 0.05   # Require 5-cent drop from peak before exiting
 
 # --- Kalshi Fees ---
 KALSHI_MAKER_FEE = 0.0175   # Maker fee coefficient (limit orders)

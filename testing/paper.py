@@ -11,7 +11,7 @@ from administration.config import (
     STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, ASSETS,
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, NEWS_ENABLED,
     BET_NEAR_FAIR, BET_SLIGHT_LEAN, BET_MOD_LEAN, BET_STRONG_LEAN,
-    STOP_LOSS_PRICE, TRAILING_TRIGGER,
+    STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -446,7 +446,7 @@ class Trader:
         side = "yes" if direction == LONG else "no"
         high_water     = contract_price
         trailing_armed = False
-        poll_interval  = 30
+        poll_interval  = 10   # 10s — tighter polling reduces stop-loss slippage
         deadline       = time.monotonic() + seconds_until_settlement
 
         while self.running:
@@ -479,8 +479,9 @@ class Trader:
                     f"{asset}: trailing-profit armed — {side.upper()} peaked at {high_water:.2f}"
                 )
 
-            # Trailing profit exit: any drop below the peak locks in gains
-            if trailing_armed and current_price < high_water:
+            # Trailing profit exit: drop of TRAILING_BUFFER cents below peak locks in gains.
+            # Buffer prevents premature exits on single-poll price noise.
+            if trailing_armed and current_price < high_water - TRAILING_BUFFER:
                 logger.info(
                     f"{asset}: trailing-profit EXIT — peaked {high_water:.2f} → now {current_price:.2f}"
                 )

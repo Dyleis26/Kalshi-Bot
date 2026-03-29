@@ -78,23 +78,24 @@ class Discord:
 
     def buy(self, direction: str, contracts: int, contracts_filled: int, price_pct: float,
             cost: float, payout: float, portfolio_total: float,
-            market_label: str = "BTC UP",
+            market_label: str = "BTC UP", bet_size: float = 0.0,
             session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
-        pnl_sign = "+" if session_pnl >= 0 else ""
+        pnl_sign = "+" if session_pnl > 0 else ""
         fill_str = (f"{contracts_filled}/{contracts}"
                     if contracts_filled != contracts
                     else f"{contracts_filled}")
+        display_cost = bet_size if bet_size > 0 else cost
         self._send(
             title=f"🚀 BUY: {market_label}",
             color=BLUE,
             description="\n".join([
                 f"**Contracts:** {fill_str} @ {price_pct:.0f}%",
-                f"**Cost:** ${cost:.2f}",
+                f"**Cost:** ${display_cost:.2f}",
                 f"**Payout:** ${payout:.2f}",
                 f"**Portfolio:** ${portfolio_total:.2f}",
                 "",
                 f"**Record:** {session_wins}W - {session_losses}L",
-                f"**Total P&L:** {pnl_sign}${session_pnl:.2f}",
+                f"**Total P&L:** {pnl_sign}${abs(session_pnl):.2f}",
             ])
         )
 
@@ -102,7 +103,7 @@ class Discord:
                  price_pct: float, pnl: float, portfolio_total: float,
                  market_label: str = "BTC UP",
                  session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
-        pnl_sign = "+" if session_pnl >= 0 else ""
+        pnl_sign = "+" if session_pnl > 0 else ""
         fill_str = (f"{contracts_filled}/{contracts}"
                     if contracts_filled != contracts
                     else f"{contracts_filled}")
@@ -116,7 +117,7 @@ class Discord:
                 f"**Portfolio:** ${portfolio_total:.2f}",
                 "",
                 f"**Record:** {session_wins}W - {session_losses}L",
-                f"**Total P&L:** {pnl_sign}${session_pnl:.2f}",
+                f"**Total P&L:** {pnl_sign}${abs(session_pnl):.2f}",
             ])
         )
 
@@ -124,7 +125,7 @@ class Discord:
                   price_pct: float, pnl: float, portfolio_total: float,
                   market_label: str = "BTC UP",
                   session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
-        pnl_sign = "+" if session_pnl >= 0 else ""
+        pnl_sign = "+" if session_pnl > 0 else ""
         fill_str = (f"{contracts_filled}/{contracts}"
                     if contracts_filled != contracts
                     else f"{contracts_filled}")
@@ -138,7 +139,7 @@ class Discord:
                 f"**Portfolio:** ${portfolio_total:.2f}",
                 "",
                 f"**Record:** {session_wins}W - {session_losses}L",
-                f"**Total P&L:** {pnl_sign}${session_pnl:.2f}",
+                f"**Total P&L:** {pnl_sign}${abs(session_pnl):.2f}",
             ])
         )
 

@@ -384,6 +384,7 @@ class Trader:
             market_label=market_label,
             trade_key=current_window,
             settlement_open=settlement_open,
+            bet_size=size,
         )
 
     # ------------------------------------------------------------------ #
@@ -517,6 +518,7 @@ class Trader:
                 market_label=market_label,
                 trade_key=ticker,
                 settlement_open=settlement_open,
+                bet_size=size,
             )
             traded = True
             break  # one trade per slot per poll cycle
@@ -540,6 +542,7 @@ class Trader:
         market_label: str,
         trade_key,          # current_window (crypto) or ticker (sports/weather)
         settlement_open,    # datetime (naive UTC) or None
+        bet_size: float = 0.0,  # clean dollar amount before fees, for Discord display
     ):
         """
         Place the order (real or simulated), record the trade, and spawn
@@ -608,6 +611,7 @@ class Trader:
             payout=payout,
             portfolio_total=portfolio_after,
             market_label=market_label,
+            bet_size=bet_size,
             session_wins=self.session_wins,
             session_losses=self.session_losses,
             session_pnl=self.session_pnl,

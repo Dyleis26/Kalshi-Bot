@@ -70,6 +70,7 @@ class PaperTrader:
         self._lock            = threading.Lock()
         self._ready_at        = None
         self._last_reset_date = None   # Tracks last daily reset date (ET) for _is_new_day()
+        self._first_window_done: set = set()  # Assets whose post-restart warmup window has fired
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
@@ -193,6 +194,16 @@ class PaperTrader:
         return ticker
 
     def _simulate_trade(self, asset: str, direction: str, signals: dict, confidence: int = 3):
+        # First-window warmup: skip the very first 15M signal after bot restart.
+        # RSI/MACD are calculated on historical candles so they're valid immediately,
+        # but the first live candle can carry backfill noise. One skipped window is
+        # worth ~$25-30 in avoided losses per restart based on observed session data.
+        if asset not in self._first_window_done:
+            self._first_window_done.add(asset)
+            logger.info(f"{asset}: skipping first window after restart (signal warmup)")
+            self._release_trade_slot(asset)
+            return
+
         kalshi_ticker = self._get_kalshi_ticker(asset)
 
         if not kalshi_ticker:
@@ -236,14 +247,58 @@ class PaperTrader:
             self._release_trade_slot(asset)
             return
 
-        # Use the signal direction as-is. Log when it runs against the market price
-        # (contrarian trade: signals say one thing, Kalshi market prices the other).
+        # Determine market direction and whether this is a contrarian trade.
         market_direction = LONG if yes_price >= 0.50 else SHORT
-        if market_direction != direction:
+        is_contrarian = (market_direction != direction)
+
+        if is_contrarian:
+            # VWAP confirmation: price must be stretched in the direction of the trade.
+            # Contrarian SHORT needs price ABOVE VWAP (stretched high → mean reversion down).
+            # Contrarian LONG needs price BELOW VWAP (stretched low → mean reversion up).
+            # Without this, we can be shorting a price already below VWAP — no edge.
+            price_above_vwap = signals["price"] > signals["vwap"]
+            if direction == SHORT and not price_above_vwap:
+                logger.info(
+                    f"{asset}: contrarian SHORT skipped — price below VWAP "
+                    f"({signals['price']:.2f} < {signals['vwap']:.2f}), no mean-reversion setup"
+                )
+                self._release_trade_slot(asset)
+                return
+            if direction == LONG and price_above_vwap:
+                logger.info(
+                    f"{asset}: contrarian LONG skipped — price above VWAP "
+                    f"({signals['price']:.2f} > {signals['vwap']:.2f}), no mean-reversion setup"
+                )
+                self._release_trade_slot(asset)
+                return
+
+            # RSI must agree: the 1H trend should support the trade direction.
+            # A contrarian SHORT with bullish 1H RSI is fighting two levels of trend.
+            # "neutral" RSI (47–53) is not sufficient conviction to oppose the market.
+            rsi_agrees = (
+                (direction == SHORT and signals["rsi_bias"] == "bear") or
+                (direction == LONG  and signals["rsi_bias"] == "bull")
+            )
+            if not rsi_agrees:
+                logger.info(
+                    f"{asset}: contrarian {direction.upper()} skipped — "
+                    f"RSI={signals['rsi']:.1f} ({signals['rsi_bias']}) opposes direction"
+                )
+                self._release_trade_slot(asset)
+                return
+
             logger.info(
                 f"{asset}: contrarian — signal={direction} vs market yes={yes_price:.2f} "
                 f"(buying {'YES at discount' if direction == LONG else 'NO at discount'})"
             )
+
+        # Log signal context at every entry to enable future backtesting of filter thresholds.
+        vwap_pos = "above" if signals["price"] > signals["vwap"] else "below"
+        logger.info(
+            f"{asset}: signal-context | rsi={signals['rsi']:.1f}({signals['rsi_bias']}) | "
+            f"price {vwap_pos} vwap ({signals['price']:.2f} vs {signals['vwap']:.2f})"
+        )
+
         side = "yes" if direction == LONG else "no"
         contract_price = yes_price if direction == LONG else no_price
 

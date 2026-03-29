@@ -3,7 +3,7 @@ import base64
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from administration.config import KALSHI_API_KEY, KALSHI_KEY_PATH, ASSETS
+from administration.config import KALSHI_API_KEY, KALSHI_KEY_PATH, ASSETS, SLOTS
 from administration.logger import log_error
 from administration.security import rate_limited_call
 
@@ -107,6 +107,57 @@ class KalshiClient:
     def get_btc_market(self):
         """Convenience wrapper — returns BTC 15M market."""
         return self.get_market_for_asset("BTC")
+
+    def get_markets_by_series(self, series_prefix: str, max_close_hours: float = 2.0) -> list:
+        """
+        Return all open markets whose series_ticker starts with series_prefix
+        AND whose close_time is within max_close_hours from now.
+
+        Used by the sports/weather slots to discover tradeable markets.
+        Returns a list of market dicts (may be empty).
+        """
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        cutoff = now + timedelta(hours=max_close_hours)
+
+        try:
+            data = self._get_public(
+                "/markets",
+                params={"status": "open", "series_ticker": series_prefix, "limit": 100},
+            )
+            markets = data.get("markets", [])
+            result = []
+            for m in markets:
+                close_str = m.get("close_time") or m.get("expiration_time", "")
+                if not close_str:
+                    continue
+                try:
+                    close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if now <= close_dt <= cutoff:
+                    result.append(m)
+            return result
+        except Exception as e:
+            log_error(f"Failed to fetch markets for series {series_prefix!r}", e)
+            return []
+
+    def get_open_markets_by_category(self, limit: int = 20) -> list:
+        """
+        Debug helper — return a sample of open markets to discover available series.
+        Run this once to find valid series_ticker values for sports/weather slots.
+        """
+        try:
+            data = self._get_public("/markets", params={"status": "open", "limit": limit})
+            markets = data.get("markets", [])
+            return [
+                {"ticker": m.get("ticker"), "series": m.get("series_ticker"),
+                 "title": m.get("title"), "close_time": m.get("close_time")}
+                for m in markets
+            ]
+        except Exception as e:
+            log_error("Failed to fetch open markets", e)
+            return []
 
     def get_market(self, ticker: str) -> dict:
         """Fetch a single market by ticker using the public API (real live data, no auth)."""

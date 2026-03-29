@@ -8,11 +8,12 @@ from administration.portfolio import Portfolio
 from administration.monitor import Monitor
 from administration.discord import Discord
 from administration.config import (
-    STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, ASSETS,
+    STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, SLOTS,
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, NEWS_ENABLED,
     BET_NEAR_FAIR, BET_SLIGHT_LEAN, BET_MOD_LEAN, BET_STRONG_LEAN,
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
+    MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -20,6 +21,8 @@ from data.kraken import KrakenFeed
 from data.history import History
 from data.trades import TradeLog
 from strategy.base import Strategy, LONG, SHORT, NONE
+from strategy.weather import WeatherStrategy
+from strategy.sports import SportsStrategy
 from administration.logger import get as get_logger, log_trade, log_halt
 
 logger = get_logger("paper")
@@ -27,61 +30,69 @@ logger = get_logger("paper")
 
 class Trader:
     """
-    Live and paper trading across 5 crypto assets using real Kraken price data.
-    Each asset runs independently with its own data, signals, and trade resolution.
+    Live and paper trading across 5 market slots:
+      - BTC:     15-min crypto Up/Down driven by Kraken WebSocket
+      - WEATHER: NWS probability vs Kalshi weather market (5-min poll)
+      - MLB:     ESPN win probability vs Kalshi MLB market (5-min poll)
+      - NBA:     ESPN win probability vs Kalshi NBA market (5-min poll)
+      - NHL:     ESPN win probability vs Kalshi NHL market (5-min poll)
 
-    live=False  → paper mode: simulates orders, uses Kalshi demo API for market data
-    live=True   → live mode:  places real orders on Kalshi, syncs balance at startup
+    live=False → paper mode: simulates orders, uses Kalshi demo API
+    live=True  → live mode: places real orders on Kalshi, syncs balance at startup
     """
 
     def __init__(self, live: bool = False, starting_balance: float = STARTING_BALANCE):
         self.live      = live
         self.portfolio = Portfolio(starting_balance)
-        self.strategy  = Strategy()
-        self.feed      = KrakenFeed()
         self.monitor   = Monitor()
         self.discord   = Discord(paper=not live)
         self.trade_log = TradeLog(mode="live" if live else "paper")
         self.kalshi    = KalshiClient(paper=not live)
 
-        # Per-asset state: dataframes, live price, history manager
-        # All History instances share the same KrakenFeed (REST calls only — thread-safe)
-        self.assets: dict = {
-            asset: {
-                "df_1h":   pd.DataFrame(),
-                "df_15m":  pd.DataFrame(),
-                "price":   0.0,
-                "history": History(asset, feed=self.feed),
-            }
-            for asset in ASSETS
+        # Crypto-specific components (BTC only)
+        self.feed     = KrakenFeed()
+        self.strategy = Strategy()
+        self.btc_state = {
+            "df_1h":   pd.DataFrame(),
+            "df_15m":  pd.DataFrame(),
+            "price":   0.0,
+            "history": History("BTC", feed=self.feed),
         }
 
-        # Trade rate limiting (per asset)
-        self.trades_this_hour  = {asset: 0 for asset in ASSETS}
-        self.hour_window_start = {asset: time.monotonic() for asset in ASSETS}
+        # Non-crypto strategy instances
+        self._weather_strategy = WeatherStrategy()
+        self._sports_strategy  = SportsStrategy()
 
-        # Kalshi ticker cache (15s TTL — short so retry loop always gets a fresh ticker
-        # in case the market rolls to the next window during a 30s retry sleep)
-        self._ticker_cache: dict = {asset: {"ticker": None, "ts": 0.0} for asset in ASSETS}
+        # Per-slot rate limiting and state tracking
+        self.trades_this_hour  = {k: 0 for k in SLOTS}
+        self.hour_window_start = {k: time.monotonic() for k in SLOTS}
 
-        # Session stats — reset every time the bot restarts
+        # Kalshi ticker cache (15s TTL — only used for BTC/crypto slot)
+        self._ticker_cache: dict = {"BTC": {"ticker": None, "ts": 0.0}}
+
+        # Session stats
         self.session_wins   = 0
         self.session_losses = 0
         self.session_pnl    = 0.0
-        self._open_stake    = 0.0  # Sum of costs for all currently open trades
-        self._last_1h_refresh = 0.0  # monotonic time of last 1H candle refresh
+        self._open_stake    = 0.0
+        self._last_1h_refresh = 0.0
 
-        self.running          = False
-        self._stopped         = False  # Guard against double bot_stopped Discord messages
-        self._lock            = threading.Lock()
-        self._ready_at        = None
-        self._last_reset_date = None   # Tracks last daily reset date (ET) for _is_new_day()
-        self._last_trade_window: dict = {asset: None for asset in ASSETS}  # Last window traded per asset
+        # One-trade-per-window/market: stores the last traded ticker per slot
+        self._last_trade_key: dict = {k: None for k in SLOTS}
 
         # Correlated-sweep protection
-        self._consec_losses:   dict = {asset: 0 for asset in ASSETS}  # consecutive losses per asset
-        self._tracked_windows: dict = {}   # {settlement_open: {"wins": N, "losses": N}}
-        self._sweep_cooloff_window   = None  # skip trades in this window after sweep loss
+        self._consec_losses:        dict = {k: 0 for k in SLOTS}
+        self._tracked_windows:      dict = {}
+        self._sweep_cooloff_window       = None  # skip BTC trades in this 15M window
+
+        # Last non-crypto poll timestamp
+        self._last_market_poll = 0.0
+
+        self.running      = False
+        self._stopped     = False
+        self._lock        = threading.Lock()
+        self._ready_at    = None
+        self._last_reset_date = None
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
@@ -89,11 +100,9 @@ class Trader:
 
     def start(self):
         mode_str = "LIVE" if self.live else "paper"
-        logger.info(f"Trader starting [{mode_str}] (5 assets)...")
+        logger.info(f"Trader starting [{mode_str}] (5 slots: BTC + Weather + MLB + NBA + NHL)...")
         self.discord.start()
 
-        # In live mode: sync portfolio balance from the real Kalshi account.
-        # Ensures we're sizing bets against our actual available funds.
         if self.live:
             live_balance = self.kalshi.get_balance()
             if live_balance > 0:
@@ -102,15 +111,13 @@ class Trader:
             else:
                 logger.warning("Live mode: could not fetch Kalshi balance — using STARTING_BALANCE")
 
-        # Fresh start — wipe trades from any previous session
         self.trade_log.reset()
 
-        # Load historical candles for all assets
-        for asset, state in self.assets.items():
-            logger.info(f"Loading history for {asset}...")
-            data = state["history"].load_all()
-            state["df_1h"]  = data["1h"]
-            state["df_15m"] = data["15m"]
+        # Load BTC historical candles
+        logger.info("Loading history for BTC...")
+        data = self.btc_state["history"].load_all()
+        self.btc_state["df_1h"]  = data["1h"]
+        self.btc_state["df_15m"] = data["15m"]
 
         self.monitor.set_connected("kraken",  True)
         self.monitor.set_connected("kalshi",  True)
@@ -118,9 +125,8 @@ class Trader:
 
         self.discord.bot_started(self.portfolio.total)
         self.running   = True
-        self._ready_at = time.monotonic() + 10  # 10s — enough for WebSocket connect + backfill
+        self._ready_at = time.monotonic() + 10
 
-        # Graceful shutdown on SIGTERM (e.g. kill, systemd, task runner)
         signal.signal(signal.SIGTERM, lambda s, f: self.stop("SIGTERM"))
 
         self.feed.start_streams(
@@ -128,12 +134,12 @@ class Trader:
             on_tick=self._on_tick,
         )
 
-        logger.info("Paper trader running. Waiting for signals on BTC, ETH, SOL, XRP, DOGE...")
+        logger.info("Trader running. BTC driven by WebSocket; Weather/MLB/NBA/NHL polled every 5 min.")
 
-        # Prime the news context in background so the first window has data
-        # without blocking the main thread during startup
         if NEWS_ENABLED:
-            t = threading.Thread(target=NewsContext.fetch, args=[list(ASSETS.keys())], daemon=True)
+            t = threading.Thread(
+                target=NewsContext.fetch, args=[["BTC"]], daemon=True
+            )
             t.start()
 
         self._heartbeat()
@@ -145,65 +151,58 @@ class Trader:
             self._stopped = True
             self.discord.bot_stopped(self.portfolio.total)
         self.discord.stop()
-        logger.info(f"Paper trader stopped: {reason}")
+        logger.info(f"Trader stopped: {reason}")
 
     # ------------------------------------------------------------------ #
-    #  WebSocket Handlers                                                  #
+    #  WebSocket Handlers (BTC only)                                      #
     # ------------------------------------------------------------------ #
 
     def _on_15m_candle(self, asset: str, candle: dict):
-        if asset not in self.assets:
+        if asset != "BTC":
             return
-        state = self.assets[asset]  # dict structure is fixed at init — safe outside lock
+        state = self.btc_state
         with self._lock:
             row = pd.DataFrame([candle])[["time", "open", "high", "low", "close", "volume"]]
             candle_time = row["time"].iloc[0]
             df = state["df_15m"]
             if not df.empty and pd.Timestamp(df["time"].iloc[-1]) == pd.Timestamp(candle_time):
-                # Same candle arrived twice (backfill + WS, or WS reconnect) — update in place
                 state["df_15m"].iloc[-1] = row.iloc[0]
             else:
                 state["df_15m"] = pd.concat([df, row], ignore_index=True).tail(300)
-        # Append to CSV outside the paper lock — History has its own internal lock
         state["history"].append(candle, "15m")
-        self._evaluate(asset)
+        self._evaluate_crypto()
 
     def _on_tick(self, asset: str, price: float):
-        if asset in self.assets:
-            self.assets[asset]["price"] = price
+        if asset == "BTC":
+            self.btc_state["price"] = price
 
     # ------------------------------------------------------------------ #
-    #  Signal Evaluation & Trade Execution                                 #
+    #  BTC Crypto Evaluation                                               #
     # ------------------------------------------------------------------ #
 
-    def _evaluate(self, asset: str):
+    def _evaluate_crypto(self):
         if time.monotonic() < self._ready_at:
             return
         if not FORCE_TRADE and not self.portfolio.can_trade():
             return
-        if not self._within_trade_limit(asset):
+        if not self._within_trade_limit("BTC"):
             return
 
-        # Sweep-loss cooloff: skip one window after SWEEP_COOLOFF_LOSSES+ simultaneous losses.
-        # Lagging indicators stay wrong for a full window after a hard reversal —
-        # sitting out one window costs little but avoids the worst signal-lag trades.
+        # Sweep-loss cooloff: skip one 15M window after SWEEP_COOLOFF_LOSSES+ simultaneous losses
         _ev_now = datetime.now(timezone.utc)
         _ev_min = _ev_now.minute - (_ev_now.minute % 15)
         eval_window = _ev_now.replace(minute=_ev_min, second=0, microsecond=0, tzinfo=None)
         with self._lock:
             cooloff = self._sweep_cooloff_window
         if cooloff is not None and eval_window <= cooloff:
-            logger.info(f"{asset}: sweep-loss cooloff active — skipping {eval_window.strftime('%H:%M')} window")
-            self._release_trade_slot(asset)
+            logger.info(f"BTC: sweep-loss cooloff active — skipping {eval_window.strftime('%H:%M')} window")
+            self._release_trade_slot("BTC")
             return
 
-        state = self.assets[asset]
+        state = self.btc_state
         if len(state["df_1h"]) < 35 or len(state["df_15m"]) < 10:
             return
 
-        # Data freshness check: don't trade on stale candles.
-        # load_all() fetches current data on startup, so this should always pass.
-        # Guards against edge cases where REST fetch lagged or CSV was very old.
         try:
             latest_candle_time = pd.to_datetime(
                 state["df_15m"]["time"].iloc[-1], format="mixed"
@@ -212,7 +211,7 @@ class Trader:
                 latest_candle_time = latest_candle_time.replace(tzinfo=timezone.utc)
             age_minutes = (datetime.now(timezone.utc) - latest_candle_time).total_seconds() / 60
             if age_minutes > 30:
-                return  # Data too stale — wait for next live candle
+                return
         except Exception:
             return
 
@@ -228,50 +227,52 @@ class Trader:
         if direction == NONE:
             return
 
-        t = threading.Thread(target=self._execute_trade, args=[asset, direction, decision["signals"], decision["confidence"]])
+        t = threading.Thread(
+            target=self._execute_crypto_trade,
+            args=[direction, decision["signals"], decision["confidence"]]
+        )
         t.daemon = True
         t.start()
 
-    def _get_kalshi_ticker(self, asset: str) -> str | None:
-        """Return the current Kalshi ticker for an asset, using a 15-second TTL cache."""
+    def _get_btc_ticker(self) -> str | None:
+        """Return the current Kalshi BTC ticker with 15-second TTL cache."""
         now = time.monotonic()
-        cache = self._ticker_cache[asset]
+        cache = self._ticker_cache["BTC"]
         if cache["ticker"] and (now - cache["ts"]) < 15:
             return cache["ticker"]
-        m = self.kalshi.get_market_for_asset(asset)
+        m = self.kalshi.get_market_for_asset("BTC")
         ticker = m.get("ticker") if m else None
-        self._ticker_cache[asset] = {"ticker": ticker, "ts": now}
+        self._ticker_cache["BTC"] = {"ticker": ticker, "ts": now}
         return ticker
 
-    def _execute_trade(self, asset: str, direction: str, signals: dict, confidence: int = 3):
-        # One-trade-per-window: compute the current 15M window boundary and block
-        # re-entry if this asset already has a trade open in this window.
+    def _execute_crypto_trade(self, direction: str, signals: dict, confidence: int = 3):
+        """Execute a BTC 15-minute Up/Down trade with full contrarian + near-fair logic."""
+        slot_key = "BTC"
+
+        # One-trade-per-window: block duplicate entries in the same 15M window
         _now_cw = datetime.now(timezone.utc)
         _cw_min = _now_cw.minute - (_now_cw.minute % 15)
         current_window = _now_cw.replace(minute=_cw_min, second=0, microsecond=0, tzinfo=None)
         with self._lock:
-            last_window = self._last_trade_window[asset]
-        if last_window == current_window:
-            logger.info(f"{asset}: already traded this window ({current_window.strftime('%H:%M')}) — skipping")
-            self._release_trade_slot(asset)
+            last_key = self._last_trade_key[slot_key]
+        if last_key == current_window:
+            logger.info(f"BTC: already traded this window ({current_window.strftime('%H:%M')}) — skipping")
+            self._release_trade_slot(slot_key)
             return
 
-        kalshi_ticker = self._get_kalshi_ticker(asset)
-
+        kalshi_ticker = self._get_btc_ticker()
         if not kalshi_ticker:
-            logger.info(f"{asset}: no Kalshi market found — skipping trade")
-            self._release_trade_slot(asset)
+            logger.info("BTC: no Kalshi market found — skipping trade")
+            self._release_trade_slot(slot_key)
             return
 
-        # Retry every 30s for up to 14 minutes (window is 15 min; stop before it closes).
-        # Always fetch BOTH yes and no prices in one call so we can use the live
-        # market probability (yes_ask) to determine the optimal direction.
-        retry_start = time.monotonic()
-        WINDOW_SECS = 14 * 60  # 14 minutes
-        attempt = 0
+        # Retry loop: wait up to 14 min for a real price
+        retry_start  = time.monotonic()
+        WINDOW_SECS  = 14 * 60
+        attempt      = 0
         yes_price, no_price = 1.0, 1.0
         while time.monotonic() - retry_start < WINDOW_SECS:
-            fresh_ticker = self._get_kalshi_ticker(asset) or kalshi_ticker
+            fresh_ticker = self._get_btc_ticker() or kalshi_ticker
             yes_price, no_price = self.kalshi.get_market_prices(fresh_ticker)
             if 0.05 <= yes_price <= 0.95:
                 kalshi_ticker = fresh_ticker
@@ -280,109 +281,273 @@ class Trader:
             remaining = WINDOW_SECS - (time.monotonic() - retry_start)
             if remaining < 30:
                 break
-            logger.info(f"{asset}: Kalshi market not yet priced (price={yes_price:.2f}) — retrying in 30s (attempt {attempt})")
+            logger.info(f"BTC: Kalshi not priced (yes={yes_price:.2f}) — retrying in 30s (attempt {attempt})")
             time.sleep(30)
 
         if not (0.05 <= yes_price <= 0.95):
-            logger.info(f"{asset}: no real Kalshi price available — skipping trade")
-            self._release_trade_slot(asset)
+            logger.info("BTC: no real Kalshi price available — skipping trade")
+            self._release_trade_slot(slot_key)
             return
 
-        # Near-fair filter: only trade when YES is in the viable payout zone.
-        # Outside [0.35, 0.65] the market is highly confident and break-even accuracy
-        # exceeds ~68% — unreachable with technical signals. Skip these windows.
         if not (CONTRACT_PRICE_MIN <= yes_price <= CONTRACT_PRICE_MAX):
             logger.info(
-                f"{asset}: market too confident (yes={yes_price:.2f}) — "
+                f"BTC: market too confident (yes={yes_price:.2f}) — "
                 f"outside near-fair zone [{CONTRACT_PRICE_MIN:.2f}, {CONTRACT_PRICE_MAX:.2f}], skipping"
             )
-            self._release_trade_slot(asset)
+            self._release_trade_slot(slot_key)
             return
 
-        # Determine market direction and whether this is a contrarian trade.
         market_direction = LONG if yes_price >= 0.50 else SHORT
-        is_contrarian = (market_direction != direction)
+        is_contrarian    = (market_direction != direction)
 
         if is_contrarian:
-            # VWAP confirmation: price must be stretched in the direction of the trade.
-            # Contrarian SHORT needs price ABOVE VWAP (stretched high → mean reversion down).
-            # Contrarian LONG needs price BELOW VWAP (stretched low → mean reversion up).
-            # Without this, we can be shorting a price already below VWAP — no edge.
             price_above_vwap = signals["price"] > signals["vwap"]
             if direction == SHORT and not price_above_vwap:
                 logger.info(
-                    f"{asset}: contrarian SHORT skipped — price below VWAP "
+                    f"BTC: contrarian SHORT skipped — price below VWAP "
                     f"({signals['price']:.2f} < {signals['vwap']:.2f}), no mean-reversion setup"
                 )
-                self._release_trade_slot(asset)
+                self._release_trade_slot(slot_key)
                 return
             if direction == LONG and price_above_vwap:
                 logger.info(
-                    f"{asset}: contrarian LONG skipped — price above VWAP "
+                    f"BTC: contrarian LONG skipped — price above VWAP "
                     f"({signals['price']:.2f} > {signals['vwap']:.2f}), no mean-reversion setup"
                 )
-                self._release_trade_slot(asset)
+                self._release_trade_slot(slot_key)
                 return
 
-            # RSI must agree: the 1H trend should support the trade direction.
-            # A contrarian SHORT with bullish 1H RSI is fighting two levels of trend.
-            # "neutral" RSI (47–53) is not sufficient conviction to oppose the market.
             rsi_agrees = (
                 (direction == SHORT and signals["rsi_bias"] == "bear") or
                 (direction == LONG  and signals["rsi_bias"] == "bull")
             )
             if not rsi_agrees:
                 logger.info(
-                    f"{asset}: contrarian {direction.upper()} skipped — "
+                    f"BTC: contrarian {direction.upper()} skipped — "
                     f"RSI={signals['rsi']:.1f} ({signals['rsi_bias']}) opposes direction"
                 )
-                self._release_trade_slot(asset)
+                self._release_trade_slot(slot_key)
                 return
 
             logger.info(
-                f"{asset}: contrarian — signal={direction} vs market yes={yes_price:.2f} "
+                f"BTC: contrarian — signal={direction} vs market yes={yes_price:.2f} "
                 f"(buying {'YES at discount' if direction == LONG else 'NO at discount'})"
             )
 
-        # Log signal context at every entry to enable future backtesting of filter thresholds.
         vwap_pos = "above" if signals["price"] > signals["vwap"] else "below"
         logger.info(
-            f"{asset}: signal-context | rsi={signals['rsi']:.1f}({signals['rsi_bias']}) | "
+            f"BTC: signal-context | rsi={signals['rsi']:.1f}({signals['rsi_bias']}) | "
             f"price {vwap_pos} vwap ({signals['price']:.2f} vs {signals['vwap']:.2f})"
         )
 
-        side = "yes" if direction == LONG else "no"
+        side           = "yes" if direction == LONG else "no"
         contract_price = yes_price if direction == LONG else no_price
 
-        # Kelly-optimal sizing: bet more when YES is near 0.50 (best EV), less when market is confident
+        # Kelly-optimal sizing
         distance = abs(contract_price - 0.50)
         if distance <= 0.05:
-            size = BET_NEAR_FAIR      # YES 0.45–0.55
+            size = BET_NEAR_FAIR
         elif distance <= 0.10:
-            size = BET_SLIGHT_LEAN    # YES 0.40–0.60
+            size = BET_SLIGHT_LEAN
         elif distance <= 0.15:
-            size = BET_MOD_LEAN       # YES 0.35–0.65
+            size = BET_MOD_LEAN
         else:
-            size = BET_STRONG_LEAN    # YES outside 0.35–0.65
+            size = BET_STRONG_LEAN
 
-        # Per-asset cooldown: halve bet when this asset is on a losing streak.
         with self._lock:
-            consec = self._consec_losses[asset]
+            consec = self._consec_losses[slot_key]
         if consec >= CONSEC_LOSS_THRESHOLD:
             size = round(size * CONSEC_LOSS_REDUCTION, 2)
-            logger.info(
-                f"{asset}: cooldown active ({consec} consecutive losses) — "
-                f"bet reduced to ${size:.2f}"
-            )
+            logger.info(f"BTC: cooldown active ({consec} consecutive losses) — bet reduced to ${size:.2f}")
 
         contracts = math.floor(size / contract_price)
         if contracts < 1:
-            self._release_trade_slot(asset)
+            self._release_trade_slot(slot_key)
             return
 
+        side_label   = "UP" if direction == LONG else "DOWN"
+        market_label = f"BTC {side_label}"
+
+        # Compute settlement window before order placement (timing matters)
+        _now = datetime.now(timezone.utc)
+        _m   = _now.minute - (_now.minute % 15)
+        settlement_open = _now.replace(minute=_m, second=0, microsecond=0, tzinfo=None)
+
+        self._place_and_monitor(
+            slot_key=slot_key,
+            slot_type="crypto",
+            direction=direction,
+            signals=signals,
+            contracts=contracts,
+            contract_price=contract_price,
+            kalshi_ticker=kalshi_ticker,
+            market_label=market_label,
+            trade_key=current_window,
+            settlement_open=settlement_open,
+        )
+
+    # ------------------------------------------------------------------ #
+    #  Non-Crypto Market Slot Evaluation (5-min poll)                     #
+    # ------------------------------------------------------------------ #
+
+    def _poll_market_slots(self):
+        """
+        Evaluate all non-crypto market slots.
+        Called from _heartbeat() every MARKET_EVAL_INTERVAL_SECS seconds.
+        Each slot runs in its own thread to avoid blocking each other.
+        """
+        for slot_key, slot_cfg in SLOTS.items():
+            if slot_cfg["type"] == "crypto":
+                continue
+            t = threading.Thread(
+                target=self._evaluate_market_slot,
+                args=[slot_key, slot_cfg],
+                daemon=True,
+            )
+            t.start()
+
+    def _evaluate_market_slot(self, slot_key: str, slot_cfg: dict):
+        """
+        Evaluate a single non-crypto market slot:
+        1. Discover open Kalshi markets closing within MARKET_MAX_CLOSE_HOURS
+        2. For each market, get external signal (NWS / ESPN)
+        3. If edge >= threshold, execute trade
+        """
+        if time.monotonic() < self._ready_at:
+            return
+        if not self._within_trade_limit(slot_key):
+            return
+        if not FORCE_TRADE and not self.portfolio.can_trade():
+            self._release_trade_slot(slot_key)
+            return
+
+        series   = slot_cfg["series"]
+        markets  = self.kalshi.get_markets_by_series(series, max_close_hours=MARKET_MAX_CLOSE_HOURS)
+
+        if not markets:
+            logger.info(f"{slot_key}: no open markets found for series={series!r} within {MARKET_MAX_CLOSE_HOURS}h")
+            self._release_trade_slot(slot_key)
+            return
+
+        slot_type = slot_cfg["type"]
+        traded = False
+
+        for market in markets:
+            ticker = market.get("ticker")
+            if not ticker:
+                continue
+
+            # One-trade-per-market: don't re-enter the same game/event twice
+            with self._lock:
+                if self._last_trade_key[slot_key] == ticker:
+                    logger.info(f"{slot_key}: already traded market {ticker} — skipping")
+                    continue
+
+            # Get signal from external source
+            if slot_type == "weather":
+                decision = self._weather_strategy.decide(
+                    market=market,
+                    lat=slot_cfg["lat"],
+                    lng=slot_cfg["lng"],
+                    city=slot_cfg.get("city", ""),
+                )
+            elif slot_type == "sports":
+                decision = self._sports_strategy.decide(
+                    market=market,
+                    espn_sport=slot_cfg["espn_sport"],
+                    sport_label=slot_cfg["label"],
+                )
+            else:
+                continue
+
+            direction    = decision["direction"]
+            market_label = decision.get("market_label", slot_key)
+
+            if direction == NONE:
+                logger.info(f"{slot_key} [{ticker}]: no trade — {decision['reason']}")
+                continue
+
+            yes_ask = float(market.get("yes_ask_dollars", 0.5))
+            no_ask  = float(market.get("no_ask_dollars",  0.5))
+            if not (0.05 <= yes_ask <= 0.95):
+                continue
+
+            contract_price = yes_ask if direction == LONG else no_ask
+
+            # Kelly sizing — same tiers as crypto
+            distance = abs(contract_price - 0.50)
+            if distance <= 0.05:
+                size = BET_NEAR_FAIR
+            elif distance <= 0.10:
+                size = BET_SLIGHT_LEAN
+            elif distance <= 0.15:
+                size = BET_MOD_LEAN
+            else:
+                size = BET_STRONG_LEAN
+
+            with self._lock:
+                consec = self._consec_losses[slot_key]
+            if consec >= CONSEC_LOSS_THRESHOLD:
+                size = round(size * CONSEC_LOSS_REDUCTION, 2)
+                logger.info(f"{slot_key}: cooldown active ({consec} consecutive losses) — bet reduced to ${size:.2f}")
+
+            contracts = math.floor(size / contract_price)
+            if contracts < 1:
+                continue
+
+            # Use market close_time as proxy for settlement
+            close_str = market.get("close_time") or market.get("expiration_time", "")
+            settlement_open = None
+            if close_str:
+                try:
+                    close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
+                    settlement_open = close_dt.replace(tzinfo=None)
+                except ValueError:
+                    pass
+
+            # Slot already claimed via _within_trade_limit — don't release it
+            self._place_and_monitor(
+                slot_key=slot_key,
+                slot_type=slot_type,
+                direction=direction,
+                signals=decision,
+                contracts=contracts,
+                contract_price=contract_price,
+                kalshi_ticker=ticker,
+                market_label=market_label,
+                trade_key=ticker,
+                settlement_open=settlement_open,
+            )
+            traded = True
+            break  # one trade per slot per poll cycle
+
+        if not traded:
+            self._release_trade_slot(slot_key)
+
+    # ------------------------------------------------------------------ #
+    #  Shared Trade Execution Path                                         #
+    # ------------------------------------------------------------------ #
+
+    def _place_and_monitor(
+        self,
+        slot_key: str,
+        slot_type: str,
+        direction: str,
+        signals: dict,
+        contracts: int,
+        contract_price: float,
+        kalshi_ticker: str,
+        market_label: str,
+        trade_key,          # current_window (crypto) or ticker (sports/weather)
+        settlement_open,    # datetime (naive UTC) or None
+    ):
+        """
+        Place the order (real or simulated), record the trade, and spawn
+        the position monitor thread. Shared by crypto and non-crypto slots.
+        """
+        side = "yes" if direction == LONG else "no"
+
         # --- Live order placement ---
-        # Paper mode skips this block and assumes a perfect fill at contract_price.
-        # Live mode places a real limit order and waits for fill confirmation.
         contracts_filled = contracts
         if self.live:
             order = self.kalshi.place_limit_order(
@@ -390,33 +555,34 @@ class Trader:
                 price_cents=round(contract_price * 100),
             )
             if not order:
-                logger.error(f"{asset}: order placement failed — skipping")
-                self._release_trade_slot(asset)
+                logger.error(f"{slot_key}: order placement failed — skipping")
+                self._release_trade_slot(slot_key)
                 return
             filled_order = self.kalshi.wait_for_fill(order["order_id"])
             if not filled_order:
-                logger.warning(f"{asset}: order expired unfilled — skipping")
-                self._release_trade_slot(asset)
+                logger.warning(f"{slot_key}: order expired unfilled — skipping")
+                self._release_trade_slot(slot_key)
                 return
             contracts_filled = filled_order.get("filled_count", contracts)
             if contracts_filled < 1:
-                logger.warning(f"{asset}: zero contracts filled — skipping")
-                self._release_trade_slot(asset)
+                logger.warning(f"{slot_key}: zero contracts filled — skipping")
+                self._release_trade_slot(slot_key)
                 return
             contracts = contracts_filled
 
-        actual_cost      = contracts * contract_price
-        fee_entry        = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)
-        total_cost       = round(actual_cost + fee_entry, 2)
-        # Net payout if win = gross - entry fee - settlement fee (both legs)
-        payout           = round(contracts * 1.00 - 2 * fee_entry, 2)
-        price_pct        = contract_price * 100
-        live_price = self.assets[asset]["price"]
+        actual_cost = contracts * contract_price
+        fee_entry   = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)
+        total_cost  = round(actual_cost + fee_entry, 2)
+        payout      = round(contracts * 1.00 - 2 * fee_entry, 2)
+        price_pct   = contract_price * 100
+        live_price  = self.btc_state["price"] if slot_type == "crypto" else 0.0
+
         with self._lock:
             self._open_stake = round(self._open_stake + total_cost, 2)
             portfolio_after  = round(self.portfolio.total - self._open_stake, 2)
-            self._last_trade_window[asset] = current_window  # one-trade-per-window
+            self._last_trade_key[slot_key] = trade_key
 
+        slot_cfg = SLOTS[slot_key]
         trade_id = self.trade_log.open_trade(
             direction=direction,
             contracts=contracts,
@@ -426,7 +592,9 @@ class Trader:
             possible_payout=payout,
             btc_price=live_price,
             signals=signals,
-            asset=asset,
+            asset=slot_key,
+            slot_type=slot_type,
+            market_label=market_label,
         )
 
         log_trade(direction, live_price, total_cost)
@@ -434,125 +602,119 @@ class Trader:
         self.discord.buy(
             direction=direction,
             contracts=contracts,
-            contracts_filled=contracts,
+            contracts_filled=contracts_filled,
             price_pct=price_pct,
             cost=total_cost,
             payout=payout,
             portfolio_total=portfolio_after,
-            asset=asset,
+            market_label=market_label,
             session_wins=self.session_wins,
             session_losses=self.session_losses,
             session_pnl=self.session_pnl,
         )
 
-        # Compute the settlement candle's open time and exact seconds until settlement.
-        # Fire at the next 15M boundary (not 15 min from now) so we don't poll late
-        # when the trade was entered partway through a window.
-        _now = datetime.now(timezone.utc)
-        _m = _now.minute - (_now.minute % 15)
-        settlement_open = _now.replace(minute=_m, second=0, microsecond=0, tzinfo=None)
-        seconds_into_window = (_now.minute % 15) * 60 + _now.second + _now.microsecond / 1e6
-        seconds_until_settlement = max(5.0, (15 * 60) - seconds_into_window + 5)  # +5s buffer
+        # Seconds until settlement
+        if settlement_open is not None and slot_type == "crypto":
+            # Crypto: fire at next 15M boundary
+            _now = datetime.now(timezone.utc)
+            seconds_into_window = (_now.minute % 15) * 60 + _now.second + _now.microsecond / 1e6
+            seconds_until_settlement = max(5.0, (15 * 60) - seconds_into_window + 5)
+        elif settlement_open is not None:
+            # Non-crypto: fire at market close time
+            _now = datetime.now(timezone.utc)
+            close_aware = settlement_open.replace(tzinfo=timezone.utc)
+            seconds_until_settlement = max(10.0, (close_aware - _now).total_seconds() + 10)
+        else:
+            seconds_until_settlement = 900.0  # fallback: 15 min
 
         t = threading.Thread(
             target=self._monitor_position,
-            args=[asset, direction, contracts, contract_price, price_pct, trade_id,
-                  kalshi_ticker, settlement_open, seconds_until_settlement]
+            args=[slot_key, slot_type, direction, contracts, contract_price, price_pct,
+                  trade_id, kalshi_ticker, settlement_open, seconds_until_settlement, market_label]
         )
-        t.daemon = True  # Dies with the process — no ghost resolutions after restart
+        t.daemon = True
         t.start()
 
-    def _monitor_position(self, asset: str, direction: str, contracts: int,
+    # ------------------------------------------------------------------ #
+    #  Position Monitor                                                    #
+    # ------------------------------------------------------------------ #
+
+    def _monitor_position(self, slot_key: str, slot_type: str,
+                          direction: str, contracts: int,
                           contract_price: float, price_pct: float, trade_id: str,
-                          kalshi_ticker: str, settlement_open, seconds_until_settlement: float):
+                          kalshi_ticker: str, settlement_open, seconds_until_settlement: float,
+                          market_label: str = ""):
         """
-        Poll the Kalshi contract price every 30s after entry and exit early if:
-          - Stop-loss: contract price drops to <= STOP_LOSS_PRICE (default 0.25)
-          - Trailing profit: once contract price >= TRAILING_TRIGGER (default 0.75),
-            sell immediately on any drop back below the observed peak.
-        Falls through to normal Kalshi settlement resolution if neither fires.
+        Poll the Kalshi contract price every 10s and exit early if:
+          - Stop-loss: contract price drops to <= STOP_LOSS_PRICE
+          - Trailing profit: once price >= TRAILING_TRIGGER, exit on any drop of TRAILING_BUFFER
+        Falls through to _resolve_trade() if neither fires.
         """
-        side = "yes" if direction == LONG else "no"
+        side           = "yes" if direction == LONG else "no"
         high_water     = contract_price
         trailing_armed = False
-        poll_interval  = 10   # 10s — tighter polling reduces stop-loss slippage
+        poll_interval  = 10
         deadline       = time.monotonic() + seconds_until_settlement
 
         while self.running:
             remaining = deadline - time.monotonic()
             if remaining <= poll_interval:
-                # Close enough to settlement — hand off to the resolver
                 if remaining > 0:
                     time.sleep(remaining)
                 break
 
             time.sleep(poll_interval)
 
-            fresh_ticker  = self._get_kalshi_ticker(asset) or kalshi_ticker
-            if not fresh_ticker:
-                continue
-            current_price = self.kalshi.get_market_price(fresh_ticker, side)
+            # Refresh ticker for crypto (market rolls every 15 min)
+            fresh_ticker = kalshi_ticker
+            if slot_type == "crypto":
+                fresh_ticker = self._get_btc_ticker() or kalshi_ticker
 
-            # Skip stale/invalid prices (demo API commonly returns 0.0 or 1.0 mid-window)
+            current_price = self.kalshi.get_market_price(fresh_ticker, side)
             if not (0.05 < current_price < 0.95):
                 continue
 
-            # Update high water mark
             if current_price > high_water:
                 high_water = current_price
 
-            # Arm trailing profit once the contract has reached the trigger threshold
             if not trailing_armed and high_water >= TRAILING_TRIGGER:
                 trailing_armed = True
                 logger.info(
-                    f"{asset}: trailing-profit armed — {side.upper()} peaked at {high_water:.2f}"
+                    f"{slot_key}: trailing-profit armed — {side.upper()} peaked at {high_water:.2f}"
                 )
 
-            # Trailing profit exit: drop of TRAILING_BUFFER cents below peak locks in gains.
-            # Buffer prevents premature exits on single-poll price noise.
             if trailing_armed and current_price < high_water - TRAILING_BUFFER:
                 logger.info(
-                    f"{asset}: trailing-profit EXIT — peaked {high_water:.2f} → now {current_price:.2f}"
+                    f"{slot_key}: trailing-profit EXIT — peaked {high_water:.2f} → now {current_price:.2f}"
                 )
-                self._exit_early(asset, direction, contracts, contract_price,
-                                 current_price, trade_id, "trailing-profit",
-                                 kalshi_ticker=fresh_ticker)
+                self._exit_early(slot_key, slot_type, direction, contracts, contract_price,
+                                 current_price, trade_id, "trailing-profit", fresh_ticker,
+                                 market_label=market_label)
                 return
 
-            # Stop-loss exit: contract lost most of its value — cut remaining risk
             if current_price <= STOP_LOSS_PRICE:
                 logger.info(
-                    f"{asset}: stop-loss EXIT — {side.upper()} at {current_price:.2f} "
+                    f"{slot_key}: stop-loss EXIT — {side.upper()} at {current_price:.2f} "
                     f"(<= {STOP_LOSS_PRICE})"
                 )
-                self._exit_early(asset, direction, contracts, contract_price,
-                                 current_price, trade_id, "stop-loss",
-                                 kalshi_ticker=fresh_ticker)
+                self._exit_early(slot_key, slot_type, direction, contracts, contract_price,
+                                 current_price, trade_id, "stop-loss", fresh_ticker,
+                                 market_label=market_label)
                 return
 
         if self.running:
-            # No early exit triggered — resolve at Kalshi settlement
-            self._resolve_trade(asset, direction, contracts, contract_price, price_pct,
-                                trade_id, kalshi_ticker, settlement_open)
+            self._resolve_trade(slot_key, slot_type, direction, contracts, contract_price,
+                                price_pct, trade_id, kalshi_ticker, settlement_open,
+                                market_label=market_label)
 
-    def _exit_early(self, asset: str, direction: str, contracts: int,
+    def _exit_early(self, slot_key: str, slot_type: str, direction: str, contracts: int,
                     contract_price: float, exit_price: float,
-                    trade_id: str, reason: str, kalshi_ticker: str = None):
-        """
-        Resolve a trade early at exit_price (stop-loss or trailing profit).
-        PnL = sale proceeds − entry cost − entry fee − exit fee.
-
-        In live mode: places a real sell order before recording the result.
-        Stop-loss uses an aggressive price (1 cent) to guarantee a fill.
-        Trailing-profit uses the observed exit price for a fair execution.
-        """
-        # --- Live sell order ---
+                    trade_id: str, reason: str, kalshi_ticker: str = None,
+                    market_label: str = ""):
+        """Resolve a trade early at exit_price (stop-loss or trailing profit)."""
         if self.live and kalshi_ticker:
             side = "yes" if direction == LONG else "no"
-            if reason == "stop-loss":
-                sell_cents = 1  # Guarantee fill — we're cutting losses, price is irrelevant
-            else:
-                sell_cents = max(1, round(exit_price * 100))
+            sell_cents = 1 if reason == "stop-loss" else max(1, round(exit_price * 100))
             self.kalshi.sell_position(kalshi_ticker, side, contracts, sell_cents)
 
         actual_cost   = contracts * contract_price
@@ -563,12 +725,17 @@ class Trader:
         pnl           = round(exit_proceeds - actual_cost - fee_paid, 4)
         win           = pnl > 0
         total_cost    = round(actual_cost + fee_entry, 2)
-        live_price    = self.assets[asset]["price"]
+        live_price    = self.btc_state["price"] if slot_type == "crypto" else 0.0
 
         with self._lock:
             self._open_stake = max(0.0, round(self._open_stake - total_cost, 2))
-            df = self.assets[asset]["df_15m"]
-            last_candle = df.iloc[-1].to_dict() if not df.empty else {}
+            last_candle = {}
+            if slot_type == "crypto":
+                df = self.btc_state["df_15m"]
+                last_candle = df.iloc[-1].to_dict() if not df.empty else {}
+
+        if not market_label:
+            market_label = self._derive_label(slot_key, direction, None)
 
         if win:
             with self._lock:
@@ -578,14 +745,15 @@ class Trader:
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
-                self._consec_losses[asset] = 0
+                self._consec_losses[slot_key] = 0
             log_trade(direction, live_price, actual_cost, result="win", pnl=pnl)
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
                 direction=direction, contracts=contracts, contracts_filled=contracts,
                 price_pct=exit_price * 100, pnl=pnl, portfolio_total=port_total,
-                asset=asset, session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
+                market_label=market_label,
+                session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )
         else:
             with self._lock:
@@ -595,23 +763,24 @@ class Trader:
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
-                self._consec_losses[asset] = min(self._consec_losses[asset] + 1, 10)
+                self._consec_losses[slot_key] = min(self._consec_losses[slot_key] + 1, 10)
             log_trade(direction, live_price, actual_cost, result="loss", pnl=pnl)
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(
                 direction=direction, contracts=contracts, contracts_filled=contracts,
                 price_pct=exit_price * 100, pnl=pnl, portfolio_total=port_total,
-                asset=asset, session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
+                market_label=market_label,
+                session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )
 
         logger.info(
-            f"{asset}: {reason} | exit={exit_price:.2f} entry={contract_price:.2f} | pnl=${pnl:+.2f}"
+            f"{slot_key}: {reason} | exit={exit_price:.2f} entry={contract_price:.2f} | pnl=${pnl:+.2f}"
         )
 
         with self._lock:
-            can_trade = self.portfolio.can_trade()
-            port_halt = self.portfolio.total
+            can_trade    = self.portfolio.can_trade()
+            port_halt    = self.portfolio.total
         if not FORCE_TRADE and not can_trade:
             halt_reason = "Daily loss limit reached"
             log_halt(halt_reason)
@@ -620,63 +789,68 @@ class Trader:
                 self._stopped = True
                 self.discord.bot_stopped(port_halt)
 
-    def _resolve_trade(self, asset: str, direction: str, contracts: int,
+    def _resolve_trade(self, slot_key: str, slot_type: str,
+                       direction: str, contracts: int,
                        contract_price: float, price_pct: float,
                        trade_id: str, kalshi_ticker: str = None,
-                       settlement_open=None):
-
-        # Kalshi settlement (ground truth)
+                       settlement_open=None, market_label: str = ""):
+        """Resolve a trade at Kalshi settlement."""
         kalshi_result = None
         if kalshi_ticker:
             kalshi_result = self.kalshi.get_market_result(kalshi_ticker)
             if kalshi_result:
-                logger.info(f"Kalshi settled {asset} {kalshi_ticker}: {kalshi_result.upper()}")
+                logger.info(f"Kalshi settled {slot_key} {kalshi_ticker}: {kalshi_result.upper()}")
             else:
-                logger.warning(f"{asset}: Kalshi settlement unavailable — falling back to Kraken")
+                logger.warning(f"{slot_key}: Kalshi settlement unavailable")
 
-        state = self.assets[asset]
-        with self._lock:
-            df = state["df_15m"]
-            if df.empty or len(df) < 2:
-                return
-            # Find the specific settlement candle by its open time rather than blindly using
-            # the latest candle (which may already be the NEXT 15M candle due to timing).
-            # Floor to minute to handle any sub-second precision in WS-sourced timestamps.
-            last = None
-            if settlement_open is not None:
-                target = pd.Timestamp(settlement_open).floor("min")
-                df_times = pd.to_datetime(df["time"], format="mixed").dt.floor("min")
-                match = df[df_times == target]
-                if not match.empty:
-                    last = match.iloc[0]
-            if last is None:
-                if settlement_open is not None:
-                    # Fallback: most recent candle at or before settlement_open.
-                    # Avoids accidentally using a future candle if the next window has
-                    # already arrived by the time this timer fires.
-                    target_ts = pd.Timestamp(settlement_open)
-                    past = df[pd.to_datetime(df["time"], format="mixed") <= target_ts]
-                    last = past.iloc[-1] if not past.empty else df.iloc[-1]
-                else:
-                    last = df.iloc[-1]
-            went_up    = last["close"] > last["open"]
-            last_candle = last.to_dict()
+        # For crypto: look up the settlement candle from Kraken data
+        last_candle = {}
+        went_up     = None
+        if slot_type == "crypto":
+            with self._lock:
+                df = self.btc_state["df_15m"]
+                if not df.empty and len(df) >= 2:
+                    last = None
+                    if settlement_open is not None:
+                        target    = pd.Timestamp(settlement_open).floor("min")
+                        df_times  = pd.to_datetime(df["time"], format="mixed").dt.floor("min")
+                        match     = df[df_times == target]
+                        if not match.empty:
+                            last = match.iloc[0]
+                    if last is None:
+                        if settlement_open is not None:
+                            target_ts = pd.Timestamp(settlement_open)
+                            past  = df[pd.to_datetime(df["time"], format="mixed") <= target_ts]
+                            last  = past.iloc[-1] if not past.empty else df.iloc[-1]
+                        else:
+                            last = df.iloc[-1]
+                    went_up     = last["close"] > last["open"]
+                    last_candle = last.to_dict()
 
+        # Determine win
         if kalshi_result:
             kalshi_side = "yes" if direction == LONG else "no"
             win = (kalshi_result == kalshi_side)
-        else:
+        elif went_up is not None:
+            # Kraken fallback for crypto only
             win = (direction == LONG and went_up) or (direction == SHORT and not went_up)
+        else:
+            # Non-crypto without Kalshi result — treat as loss (conservative)
+            logger.warning(f"{slot_key}: no settlement data — recording as loss")
+            win = False
 
-        actual_cost  = contracts * contract_price
-        fee_one_leg  = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)
-        total_cost   = round(actual_cost + fee_one_leg, 2)
-        live_price   = state["price"]
+        actual_cost = contracts * contract_price
+        fee_one_leg = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)
+        total_cost  = round(actual_cost + fee_one_leg, 2)
+        live_price  = self.btc_state["price"] if slot_type == "crypto" else 0.0
+
         with self._lock:
             self._open_stake = max(0.0, round(self._open_stake - total_cost, 2))
 
+        if not market_label:
+            market_label = self._derive_label(slot_key, direction, None)
+
         if win:
-            # Kalshi charges fees at both entry AND settlement on winning trades
             fee_paid = round(fee_one_leg * 2, 4)
             gross    = contracts * 1.00
             pnl      = round(gross - actual_cost - fee_paid, 4)
@@ -685,10 +859,10 @@ class Trader:
                 self.session_pnl   = round(self.session_pnl + pnl, 4)
                 self.portfolio.record_win(pnl)
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
-                port_total = self.portfolio.total
+                port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
-                self._consec_losses[asset] = 0
-                if settlement_open is not None:
+                self._consec_losses[slot_key] = 0
+                if settlement_open is not None and slot_type == "crypto":
                     self._tracked_windows.setdefault(
                         settlement_open, {"wins": 0, "losses": 0}
                     )["wins"] += 1
@@ -696,19 +870,12 @@ class Trader:
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
-                direction=direction,
-                contracts=contracts,
-                contracts_filled=contracts,
-                price_pct=price_pct,
-                pnl=pnl,
-                portfolio_total=port_total,
-                asset=asset,
-                session_wins=s_wins,
-                session_losses=s_losses,
-                session_pnl=s_pnl,
+                direction=direction, contracts=contracts, contracts_filled=contracts,
+                price_pct=price_pct, pnl=pnl, portfolio_total=port_total,
+                market_label=market_label,
+                session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )
         else:
-            # On a loss: only the entry fee was paid (no settlement fee)
             fee_paid = round(fee_one_leg, 4)
             pnl      = round(-actual_cost - fee_paid, 4)
             with self._lock:
@@ -716,10 +883,10 @@ class Trader:
                 self.session_pnl     = round(self.session_pnl + pnl, 4)
                 self.portfolio.record_loss(abs(pnl))
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
-                port_total = self.portfolio.total
+                port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
-                self._consec_losses[asset] = min(self._consec_losses[asset] + 1, 10)
-                if settlement_open is not None:
+                self._consec_losses[slot_key] = min(self._consec_losses[slot_key] + 1, 10)
+                if settlement_open is not None and slot_type == "crypto":
                     _wr = self._tracked_windows.setdefault(
                         settlement_open, {"wins": 0, "losses": 0}
                     )
@@ -733,7 +900,6 @@ class Trader:
                                 f"{settlement_open.strftime('%H:%M')} window — "
                                 f"skipping {_next_w.strftime('%H:%M')} window"
                             )
-                    # Prune entries older than 30 min to prevent unbounded growth
                     _cutoff = settlement_open - timedelta(minutes=30)
                     for _k in [k for k in self._tracked_windows if k < _cutoff]:
                         del self._tracked_windows[_k]
@@ -741,20 +907,14 @@ class Trader:
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(
-                direction=direction,
-                contracts=contracts,
-                contracts_filled=contracts,
-                price_pct=price_pct,
-                pnl=pnl,   # negative; discord.py applies abs() for display
-                portfolio_total=port_total,
-                asset=asset,
-                session_wins=s_wins,
-                session_losses=s_losses,
-                session_pnl=s_pnl,
+                direction=direction, contracts=contracts, contracts_filled=contracts,
+                price_pct=price_pct, pnl=pnl, portfolio_total=port_total,
+                market_label=market_label,
+                session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )
 
         with self._lock:
-            can_trade = self.portfolio.can_trade()
+            can_trade       = self.portfolio.can_trade()
             port_total_halt = self.portfolio.total
         if not FORCE_TRADE and not can_trade:
             reason = "Daily loss limit reached"
@@ -765,25 +925,36 @@ class Trader:
                 self.discord.bot_stopped(port_total_halt)
 
     # ------------------------------------------------------------------ #
-    #  Guards                                                              #
+    #  Helpers                                                             #
     # ------------------------------------------------------------------ #
 
-    def _within_trade_limit(self, asset: str) -> bool:
-        """Check hourly trade limit and pre-increment atomically to prevent races."""
+    def _derive_label(self, slot_key: str, direction: str, trade_key) -> str:
+        """
+        Reconstruct the market_label for _exit_early / _resolve_trade.
+        For crypto: 'BTC UP' or 'BTC DOWN'.
+        For sports/weather: the label is embedded in the trade log;
+        we build a fallback here from the slot name and direction.
+        """
+        if slot_key == "BTC":
+            return f"BTC {'UP' if direction == LONG else 'DOWN'}"
+        slot_label = SLOTS[slot_key]["label"]
+        direction_word = "YES" if direction == LONG else "NO"
+        return f"{slot_label}: {direction_word}"
+
+    def _within_trade_limit(self, slot_key: str) -> bool:
         with self._lock:
             now = time.monotonic()
-            if now - self.hour_window_start[asset] >= 3600:
-                self.trades_this_hour[asset]  = 0
-                self.hour_window_start[asset] = now
-            if self.trades_this_hour[asset] < MAX_TRADES_PER_HOUR:
-                self.trades_this_hour[asset] += 1
+            if now - self.hour_window_start[slot_key] >= 3600:
+                self.trades_this_hour[slot_key]  = 0
+                self.hour_window_start[slot_key] = now
+            if self.trades_this_hour[slot_key] < MAX_TRADES_PER_HOUR:
+                self.trades_this_hour[slot_key] += 1
                 return True
             return False
 
-    def _release_trade_slot(self, asset: str):
-        """Return a pre-claimed trade slot when a trade is ultimately skipped."""
+    def _release_trade_slot(self, slot_key: str):
         with self._lock:
-            self.trades_this_hour[asset] = max(0, self.trades_this_hour[asset] - 1)
+            self.trades_this_hour[slot_key] = max(0, self.trades_this_hour[slot_key] - 1)
 
     # ------------------------------------------------------------------ #
     #  Heartbeat                                                           #
@@ -793,38 +964,44 @@ class Trader:
         try:
             elapsed = 0
             while self.running:
-                time.sleep(10)         # Short sleep so SIGTERM exits within 10s
+                time.sleep(10)
                 elapsed += 10
+
+                # Non-crypto slots: poll every MARKET_EVAL_INTERVAL_SECS (5 min)
+                now = time.monotonic()
+                if now - self._last_market_poll >= MARKET_EVAL_INTERVAL_SECS:
+                    self._last_market_poll = now
+                    self._poll_market_slots()
+
                 if elapsed < 900:
                     continue
                 elapsed = 0
                 self.monitor.print_status()
-                # Refresh news context in background — HTTP calls can take up to 20s
-                # and must not block the heartbeat or 1H candle refresh
+
                 if NEWS_ENABLED:
-                    t = threading.Thread(target=NewsContext.fetch, args=[list(ASSETS.keys())], daemon=True)
+                    t = threading.Thread(
+                        target=NewsContext.fetch, args=[["BTC"]], daemon=True
+                    )
                     t.start()
-                # Refresh 1H candles from REST every 15 min (matches heartbeat cadence)
-                # Keeps RSI/MACD trend filter at most ~15 min stale instead of ~60 min
-                now = time.monotonic()
+
+                # Refresh BTC 1H candles every 15 min
                 if now - self._last_1h_refresh >= 900:
-                    for asset, state in self.assets.items():
-                        fresh_1h = state["history"].load("1h")
-                        with self._lock:
-                            state["df_1h"] = fresh_1h
+                    fresh_1h = self.btc_state["history"].load("1h")
+                    with self._lock:
+                        self.btc_state["df_1h"] = fresh_1h
                     self._last_1h_refresh = now
+
                 if self._is_new_day():
                     self.portfolio.reset_day()
+
         except (KeyboardInterrupt, SystemExit):
             self.stop("Keyboard interrupt")
 
     def _is_new_day(self) -> bool:
-        # Returns True exactly once per calendar day (ET), tracking the last reset date.
-        # Robust to heartbeat timing — won't miss midnight if heartbeat skips a window.
         now_et = datetime.now(timezone.utc) - timedelta(hours=4)
-        today = now_et.date()
+        today  = now_et.date()
         if self._last_reset_date is None:
-            self._last_reset_date = today  # Initialize on first call — no reset
+            self._last_reset_date = today
             return False
         if today != self._last_reset_date:
             self._last_reset_date = today

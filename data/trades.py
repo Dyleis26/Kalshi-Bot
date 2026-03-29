@@ -12,7 +12,9 @@ COLUMNS = [
     # Identity
     "trade_id",           # Unique ID for this trade
     "mode",               # 'paper' or 'live'
-    "asset",              # 'BTC', 'ETH', 'SOL', 'XRP', 'DOGE'
+    "asset",              # Slot key: 'BTC', 'WEATHER', 'MLB', 'NBA', 'NHL'
+    "slot_type",          # 'crypto', 'weather', 'sports'
+    "market_label",       # Human label: 'BTC UP', 'MLB: Cubs to WIN', etc.
 
     # Entry
     "entry_time",         # UTC timestamp when trade was placed
@@ -83,7 +85,8 @@ class TradeLog:
     def open_trade(self, direction: str, contracts: int, contracts_filled: int,
                    contract_price_pct: float,
                    cost: float, possible_payout: float, btc_price: float,
-                   signals: dict, asset: str = "BTC") -> str:
+                   signals: dict, asset: str = "BTC",
+                   slot_type: str = "crypto", market_label: str = "") -> str:
         """
         Record a trade entry. Returns a unique trade_id to reference at close.
 
@@ -94,8 +97,11 @@ class TradeLog:
             contract_price_pct:  price as percentage (e.g. 50.0)
             cost:                total cost including fees
             possible_payout:     max payout if win
-            btc_price:           live BTC price at entry
-            signals:             full signal snapshot from strategy.signals.evaluate()
+            btc_price:           live price at entry (0 for non-crypto slots)
+            signals:             signal snapshot (crypto) or edge dict (weather/sports)
+            asset:               slot key ('BTC', 'WEATHER', 'MLB', 'NBA', 'NHL')
+            slot_type:           'crypto', 'weather', or 'sports'
+            market_label:        human-readable label for Discord/CSV (e.g. 'MLB: Cubs to WIN')
         """
         trade_id = str(uuid.uuid4())[:8]
         entry_time = datetime.now(timezone.utc).isoformat()
@@ -105,6 +111,8 @@ class TradeLog:
             "trade_id":           trade_id,
             "mode":               self.mode,
             "asset":              asset,
+            "slot_type":          slot_type,
+            "market_label":       market_label or asset,
             "entry_time":         entry_time,
             "direction":          direction,
             "btc_price_entry":    round(btc_price, 2),
@@ -146,13 +154,13 @@ class TradeLog:
         move_pct = round((window_close - window_open) / window_open, 6) if window_open else 0
 
         updates = {
-            "window_open":      round(window_open, 2),
-            "window_high":      round(btc_candle.get("high", 0), 2),
-            "window_low":       round(btc_candle.get("low", 0), 2),
-            "window_close":     round(window_close, 2),
-            "window_volume":    round(btc_candle.get("volume", 0), 4),
-            "window_move_pct":  move_pct,
-            "window_direction": "up" if move_pct > 0 else "down",
+            "window_open":      round(window_open, 2) if window_open else None,
+            "window_high":      round(btc_candle.get("high", 0), 2) if btc_candle.get("high") else None,
+            "window_low":       round(btc_candle.get("low", 0), 2) if btc_candle.get("low") else None,
+            "window_close":     round(window_close, 2) if window_close else None,
+            "window_volume":    round(btc_candle.get("volume", 0), 4) if btc_candle.get("volume") else None,
+            "window_move_pct":  move_pct if window_open else None,
+            "window_direction": ("up" if move_pct > 0 else "down") if window_open else None,
             "exit_time":        exit_time.isoformat(),
             "duration_secs":    None,  # computed below under lock
             "result":           result,
@@ -221,7 +229,8 @@ class TradeLog:
         # Prevent string columns from being inferred as float64 when all values are null,
         # which would cause FutureWarning (soon an error) when close_trade writes strings back.
         str_cols = [
-            "trade_id", "mode", "asset", "direction", "entry_time", "exit_time",
+            "trade_id", "mode", "asset", "slot_type", "market_label",
+            "direction", "entry_time", "exit_time",
             "result", "window_direction", "rsi_bias", "macd_bias", "momentum_bias", "vwap_bias",
         ]
         for col in str_cols:

@@ -16,7 +16,7 @@ KALSHI_KEY_PATH = os.getenv(
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-# --- Assets ---
+# --- Assets (kept for backtest / optimizer — unchanged) ---
 ASSETS = {
     "BTC":  {"kraken_rest": "XBTUSD",  "kraken_ws": "BTC/USD",  "kalshi_series": "KXBTC15M"},
     "ETH":  {"kraken_rest": "ETHUSD",  "kraken_ws": "ETH/USD",  "kalshi_series": "KXETH15M"},
@@ -24,7 +24,57 @@ ASSETS = {
     "XRP":  {"kraken_rest": "XRPUSD",  "kraken_ws": "XRP/USD",  "kalshi_series": "KXXRP15M"},
     "DOGE": {"kraken_rest": "XDGUSD",  "kraken_ws": "DOGE/USD", "kalshi_series": "KXDOGE15M"},
 }
-NUM_SLOTS = len(ASSETS)  # 5 — one capital slot per asset
+
+# --- Live Trading Slots (5 market slots used by paper.py / live trader) ---
+# BTC: 15-min crypto Up/Down (Kraken WebSocket driven)
+# WEATHER/MLB/NBA/NHL: external-probability arbitrage (5-min poll driven)
+#
+# NOTE: Kalshi series prefixes for sports/weather are guesses based on known
+# Kalshi conventions. Run `python -c "from administration.kalshi import KalshiClient;
+# c=KalshiClient(); print(c.get_open_markets_by_category())"` to verify live tickers,
+# then update the series fields below.
+SLOTS = {
+    "BTC": {
+        "type":        "crypto",
+        "label":       "BTC",
+        "series":      "KXBTC15M",
+        "kraken_rest": "XBTUSD",
+        "kraken_ws":   "BTC/USD",
+    },
+    "WEATHER": {
+        "type":       "weather",
+        "label":      "Weather",
+        "series":     "KXHIGH",      # Kalshi high-temperature series prefix
+        "city":       "New York City",
+        "lat":        40.7128,
+        "lng":        -74.0060,
+    },
+    "MLB": {
+        "type":       "sports",
+        "label":      "MLB",
+        "series":     "KXMLB",       # Kalshi MLB game-winner series prefix
+        "espn_sport": "baseball/mlb",
+    },
+    "NBA": {
+        "type":       "sports",
+        "label":      "NBA",
+        "series":     "KXNBA",       # Kalshi NBA game-winner series prefix
+        "espn_sport": "basketball/nba",
+    },
+    "NHL": {
+        "type":       "sports",
+        "label":      "NHL",
+        "series":     "KXNHL",       # Kalshi NHL game-winner series prefix
+        "espn_sport": "hockey/nhl",
+    },
+}
+NUM_SLOTS = len(SLOTS)  # 5 — one capital slot per market type
+
+# --- Non-crypto slot settings ---
+MARKET_EVAL_INTERVAL_SECS = 300   # Poll weather/sports slots every 5 minutes
+SPORTS_EDGE_MIN            = 0.08  # Need ≥8% edge over Kalshi YES price to enter
+WEATHER_EDGE_MIN           = 0.10  # Need ≥10% edge over Kalshi YES price to enter
+MARKET_MAX_CLOSE_HOURS     = 2.0   # Only trade markets closing within 2 hours
 
 # --- Market ---
 INTERVALS = {

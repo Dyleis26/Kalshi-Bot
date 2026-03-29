@@ -81,7 +81,7 @@ CONTRACT_PRICE_MAX = 0.65
 
 # --- News Context ---
 NEWS_ENABLED         = True    # Toggle the news sentiment filter on/off
-NEWS_MAX_AGE_SECS    = 86400   # 24h — NewsAPI free tier has ~24h delay; use yesterday's sentiment
+NEWS_MAX_AGE_SECS    = 172800  # 48h — NewsAPI free tier ~24-26h delay; 48h window reliably captures yesterday's articles
 NEWS_HIGH_CONFIDENCE = 8       # Score threshold for "high" confidence bias
 NEWS_MED_CONFIDENCE  = 3       # Score threshold for "medium" confidence bias
 

@@ -10,6 +10,7 @@ from administration.discord import Discord
 from administration.config import (
     STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, ASSETS,
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, NEWS_ENABLED,
+    BET_NEAR_FAIR, BET_SLIGHT_LEAN, BET_MOD_LEAN, BET_STRONG_LEAN,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -247,7 +248,16 @@ class PaperTrader:
             self._release_trade_slot(asset)
             return
 
-        size = self.strategy.size(confidence)
+        # Kelly-optimal sizing: bet more when YES is near 0.50 (best EV), less when market is confident
+        distance = abs(contract_price - 0.50)
+        if distance <= 0.05:
+            size = BET_NEAR_FAIR      # YES 0.45–0.55
+        elif distance <= 0.10:
+            size = BET_SLIGHT_LEAN    # YES 0.40–0.60
+        elif distance <= 0.15:
+            size = BET_MOD_LEAN       # YES 0.35–0.65
+        else:
+            size = BET_STRONG_LEAN    # YES outside 0.35–0.65
 
         contracts = math.floor(size / contract_price)
         if contracts < 1:

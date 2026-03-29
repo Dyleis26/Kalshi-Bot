@@ -59,10 +59,17 @@ PROFIT_TO_CASH = 0.50       # 50% of each profit goes to cash
 # --- Risk ---
 DAILY_LOSS_LIMIT = 1.00     # Data collection: disabled (100% loss required to halt)
 KELLY_FRACTION = 0.20       # Use 20% of full Kelly
-MAX_BET = 5.00              # Flat $5 per trade — all trades equal size
-MIN_BET = 5.00              # Matches MAX_BET — no size variation
+MAX_BET = 10.00             # Kelly max — near-fair prices (YES 0.45–0.55)
+MIN_BET = 3.00              # Kelly floor — market very confident (YES outside 0.35–0.65)
 MAX_LOSING_STREAK = 999     # Data collection: disabled
 LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
+
+# --- Kelly-Optimal Sizing Tiers (based on contract price distance from 0.50) ---
+# Bet more when YES is near 0.50 (best EV zone), less when market is confident.
+BET_NEAR_FAIR   = 10.00   # YES 0.45–0.55: highest EV, best edge zone
+BET_SLIGHT_LEAN =  7.00   # YES 0.40–0.60: decent EV
+BET_MOD_LEAN    =  5.00   # YES 0.35–0.65: marginal EV
+BET_STRONG_LEAN =  3.00   # YES outside 0.35–0.65: market confident, floor bet
 
 # --- Kalshi Contract Price Filter ---
 CONTRACT_PRICE_MIN = 0.05   # Block only truly invalid prices (no real market)

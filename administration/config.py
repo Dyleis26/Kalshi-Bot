@@ -81,7 +81,7 @@ CONTRACT_PRICE_MAX = 0.65
 
 # --- News Context ---
 NEWS_ENABLED         = True    # Toggle the news sentiment filter on/off
-NEWS_MAX_AGE_SECS    = 3600    # Ignore reports older than 60 min (increased from 30 — crypto news stays relevant longer)
+NEWS_MAX_AGE_SECS    = 86400   # 24h — NewsAPI free tier has ~24h delay; use yesterday's sentiment
 NEWS_HIGH_CONFIDENCE = 8       # Score threshold for "high" confidence bias
 NEWS_MED_CONFIDENCE  = 3       # Score threshold for "medium" confidence bias
 

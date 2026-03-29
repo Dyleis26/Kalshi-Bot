@@ -71,9 +71,12 @@ BET_SLIGHT_LEAN =  7.00   # YES 0.40–0.60: decent EV
 BET_MOD_LEAN    =  5.00   # YES 0.35–0.65: marginal EV
 BET_STRONG_LEAN =  3.00   # YES outside 0.35–0.65: market confident, floor bet
 
-# --- Kalshi Contract Price Filter ---
-CONTRACT_PRICE_MIN = 0.05   # Block only truly invalid prices (no real market)
-CONTRACT_PRICE_MAX = 0.95   # Block only truly invalid prices (no real market)
+# --- Kalshi Contract Price Filter (near-fair zone) ---
+# Only trade when YES is in this range — outside it the payout asymmetry makes
+# positive EV mathematically impossible even with accurate signals.
+# YES=0.65 requires 68%+ accuracy to break even; YES=0.50 requires only ~52%.
+CONTRACT_PRICE_MIN = 0.35
+CONTRACT_PRICE_MAX = 0.65
 
 # --- News Context ---
 NEWS_ENABLED         = True    # Toggle the news sentiment filter on/off

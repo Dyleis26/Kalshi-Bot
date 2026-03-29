@@ -225,28 +225,27 @@ class PaperTrader:
             self._release_trade_slot(asset)
             return
 
-        # Market alignment: the Kalshi YES ask is a calibrated real-time probability.
-        # yes_ask > 0.50 = market favours UP this window → go LONG.
-        # yes_ask < 0.50 = market favours DOWN this window → go SHORT.
-        # Each asset is priced independently, creating per-asset direction diversity
-        # instead of all 5 following the same lagging technical signal.
-        market_direction = LONG if yes_price >= 0.50 else SHORT
-        if market_direction != direction:
+        # Near-fair filter: only trade when YES is in the viable payout zone.
+        # Outside [0.35, 0.65] the market is highly confident and break-even accuracy
+        # exceeds ~68% — unreachable with technical signals. Skip these windows.
+        if not (CONTRACT_PRICE_MIN <= yes_price <= CONTRACT_PRICE_MAX):
             logger.info(
-                f"{asset}: market alignment {direction}→{market_direction} "
-                f"(yes={yes_price:.2f})"
-            )
-        direction = market_direction
-        side = "yes" if direction == LONG else "no"
-        contract_price = yes_price if direction == LONG else no_price
-
-        if not (CONTRACT_PRICE_MIN <= contract_price <= CONTRACT_PRICE_MAX):
-            logger.info(
-                f"{asset}: contract price {contract_price:.2f} outside "
-                f"[{CONTRACT_PRICE_MIN:.2f}, {CONTRACT_PRICE_MAX:.2f}] — skipping trade"
+                f"{asset}: market too confident (yes={yes_price:.2f}) — "
+                f"outside near-fair zone [{CONTRACT_PRICE_MIN:.2f}, {CONTRACT_PRICE_MAX:.2f}], skipping"
             )
             self._release_trade_slot(asset)
             return
+
+        # Use the signal direction as-is. Log when it runs against the market price
+        # (contrarian trade: signals say one thing, Kalshi market prices the other).
+        market_direction = LONG if yes_price >= 0.50 else SHORT
+        if market_direction != direction:
+            logger.info(
+                f"{asset}: contrarian — signal={direction} vs market yes={yes_price:.2f} "
+                f"(buying {'YES at discount' if direction == LONG else 'NO at discount'})"
+            )
+        side = "yes" if direction == LONG else "no"
+        contract_price = yes_price if direction == LONG else no_price
 
         # Kelly-optimal sizing: bet more when YES is near 0.50 (best EV), less when market is confident
         distance = abs(contract_price - 0.50)

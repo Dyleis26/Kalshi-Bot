@@ -616,7 +616,7 @@ class Trader:
         actual_cost = contracts * contract_price
         fee_entry   = KALSHI_MAKER_FEE * contracts * min(contract_price, 1 - contract_price)
         total_cost  = round(actual_cost + fee_entry, 2)
-        payout      = round(contracts * 1.00 - 2 * fee_entry, 2)
+        payout      = round(contracts * 1.00 - fee_entry, 2)
         price_pct   = contract_price * 100
         live_price  = self.btc_state["price"] if slot_type == "crypto" else 0.0
 
@@ -906,7 +906,7 @@ class Trader:
             market_label = self._derive_label(slot_key, direction, None)
 
         if win:
-            fee_paid = round(fee_one_leg * 2, 4)
+            fee_paid = round(fee_one_leg, 4)   # settlement exit fee = 0 (min(1.0, 0.0) = 0)
             gross    = contracts * 1.00
             pnl      = round(gross - actual_cost - fee_paid, 4)
             with self._lock:

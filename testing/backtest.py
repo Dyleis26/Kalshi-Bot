@@ -148,13 +148,17 @@ class Backtest:
         """
         Calculate net PnL after Kalshi fees.
 
-        Win:  size × (1 - contract_price) - fee
-        Loss: -size + fee (already lost stake, still pay fee)
+        Fee formula: fee_rate × contracts × min(price, 1 - price)
+        Settlement exit fee = 0 because min(1.0, 0.0) = 0.
+
+        Win:  contracts × $1.00 - size - fee_entry
+        Loss: -size - fee_entry
         """
-        fee = self.fee_rate * size * (1 - contract_price)
+        contracts = size / contract_price
+        fee = self.fee_rate * contracts * min(contract_price, 1 - contract_price)
 
         if outcome == "win":
-            gross = size * (1 - contract_price) / contract_price
-            return round(gross - fee, 4)
+            gross = contracts * 1.00
+            return round(gross - size - fee, 4)
         else:
-            return round(-(size) - fee, 4)
+            return round(-size - fee, 4)

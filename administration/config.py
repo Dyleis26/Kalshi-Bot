@@ -111,7 +111,7 @@ ORDER_TIMEOUT_SECS = 120    # Cancel unfilled orders after 2 minutes
 MAX_TRADES_PER_HOUR = 4     # 4 per hour per asset (paper.py multiplies by NUM_SLOTS)
 
 # --- Portfolio ---
-STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.00"))
+STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "500.00"))
 CASH_SPLIT = 0.50           # 50% of portfolio always in cash
 CAPITAL_SPLIT = 0.50        # 50% available for trading
 PROFIT_TO_CASH = 0.50       # 50% of each profit goes to cash

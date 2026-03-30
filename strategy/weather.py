@@ -132,13 +132,14 @@ class WeatherStrategy:
         logger.info(f"Weather [{city}]: {reason}")
 
         return {
-            "direction":     direction,
-            "confidence":    round(abs(edge), 4),
-            "external_prob": round(external_prob, 4),
-            "kalshi_yes":    round(yes_ask, 4),
-            "edge":          round(edge, 4),
-            "reason":        reason,
-            "market_label":  market_label,
+            "direction":      direction,
+            "confidence":     round(abs(edge), 4),
+            "confidence_pct": round(min(abs(edge) / 0.5 * 100, 100.0), 1),
+            "external_prob":  round(external_prob, 4),
+            "kalshi_yes":     round(yes_ask, 4),
+            "edge":           round(edge, 4),
+            "reason":         reason,
+            "market_label":   market_label,
             # Crypto-compatible fields (empty) for trade log
             "rsi": 0, "macd": 0, "momentum": 0, "vwap": 0, "price": 0,
             "rsi_bias": None, "macd_bias": None, "momentum_bias": None, "vwap_bias": None,
@@ -202,13 +203,14 @@ def _build_label(title: str, city: str) -> str:
 
 def _no_trade(reason: str, yes_ask: float) -> dict:
     return {
-        "direction":     NONE,
-        "confidence":    0.0,
-        "external_prob": 0.0,
-        "kalshi_yes":    round(yes_ask, 4),
-        "edge":          0.0,
-        "reason":        reason,
-        "market_label":  "Weather",
+        "direction":      NONE,
+        "confidence":     0.0,
+        "confidence_pct": 0.0,
+        "external_prob":  0.0,
+        "kalshi_yes":     round(yes_ask, 4),
+        "edge":           0.0,
+        "reason":         reason,
+        "market_label":   "Weather",
         "rsi": 0, "macd": 0, "momentum": 0, "vwap": 0, "price": 0,
         "rsi_bias": None, "macd_bias": None, "momentum_bias": None, "vwap_bias": None,
     }

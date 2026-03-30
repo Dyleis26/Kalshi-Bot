@@ -55,15 +55,20 @@ def get(name="bot"):
     return logging.getLogger(name)
 
 
-def log_trade(direction: str, price: float, size: float, result: str = None, pnl: float = None):
+def log_trade(direction: str, price: float, size: float, confidence_pct: float = 0.0,
+              result: str = None, pnl: float = None):
     """Log a trade entry or result to the trade log."""
     logger = logging.getLogger("trade")
     if result is None:
-        logger.info(f"ENTRY | {direction.upper()} | price={price:.4f} | size=${size:.2f}")
+        logger.info(
+            f"ENTRY | {direction.upper()} | price={price:.4f} | size=${size:.2f} "
+            f"| conf={confidence_pct:.1f}%"
+        )
     else:
         logger.info(
             f"RESULT | {result.upper()} | direction={direction.upper()} "
-            f"| price={price:.4f} | size=${size:.2f} | pnl=${pnl:+.2f}"
+            f"| price={price:.4f} | size=${size:.2f} | pnl=${pnl:+.2f} "
+            f"| conf={confidence_pct:.1f}%"
         )
 
 

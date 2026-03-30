@@ -25,6 +25,7 @@ COLUMNS = [
     "contracts",          # Number of contracts requested
     "contracts_filled",   # Number of contracts actually filled (may be less than requested on live)
     "contract_price_pct", # Contract price as % (e.g. 50.0)
+    "confidence_pct",     # Model confidence in this trade (0.0–100.0%)
     "cost",               # Total dollar cost including entry fee
     "possible_payout",    # Max payout if win
 
@@ -83,9 +84,9 @@ class TradeLog:
                 os.rename(TRADES_FILE, archive)
 
     def open_trade(self, direction: str, contracts: int, contracts_filled: int,
-                   contract_price_pct: float,
-                   cost: float, possible_payout: float, btc_price: float,
-                   signals: dict, asset: str = "BTC",
+                   contract_price_pct: float, confidence_pct: float = 0.0,
+                   cost: float = 0.0, possible_payout: float = 0.0, btc_price: float = 0.0,
+                   signals: dict = None, asset: str = "BTC",
                    slot_type: str = "crypto", market_label: str = "") -> str:
         """
         Record a trade entry. Returns a unique trade_id to reference at close.
@@ -103,6 +104,8 @@ class TradeLog:
             slot_type:           'crypto', 'weather', or 'sports'
             market_label:        human-readable label for Discord/CSV (e.g. 'MLB: Cubs to WIN')
         """
+        if signals is None:
+            signals = {}
         trade_id = str(uuid.uuid4())[:8]
         entry_time = datetime.now(timezone.utc).isoformat()
 
@@ -119,6 +122,7 @@ class TradeLog:
             "contracts":          contracts,
             "contracts_filled":   contracts_filled,
             "contract_price_pct": contract_price_pct,
+            "confidence_pct":     round(confidence_pct, 1),
             "cost":               cost,
             "possible_payout":    possible_payout,
             "rsi_1h":             round(signals.get("rsi", 0), 4),

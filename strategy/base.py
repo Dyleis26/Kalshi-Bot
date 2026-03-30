@@ -130,10 +130,11 @@ class Strategy:
         )
 
         return {
-            "direction": direction,
-            "confidence": max(bull_count, bear_count),
-            "signals": signals,
-            "reason": reason,
+            "direction":      direction,
+            "confidence":     max(bull_count, bear_count),
+            "confidence_pct": round(max(bull_count, bear_count) / 6 * 100, 1),
+            "signals":        signals,
+            "reason":         reason,
         }
 
     # ------------------------------------------------------------------ #

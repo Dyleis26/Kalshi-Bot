@@ -231,7 +231,7 @@ class Trader:
 
         t = threading.Thread(
             target=self._execute_crypto_trade,
-            args=[direction, decision["signals"], decision["confidence"]]
+            args=[direction, decision["signals"], decision["confidence"], decision["confidence_pct"]]
         )
         t.daemon = True
         t.start()
@@ -247,7 +247,7 @@ class Trader:
         self._ticker_cache["BTC"] = {"ticker": ticker, "ts": now}
         return ticker
 
-    def _execute_crypto_trade(self, direction: str, signals: dict, confidence: int = 3):
+    def _execute_crypto_trade(self, direction: str, signals: dict, confidence: int = 3, confidence_pct: float = 50.0):
         """Execute a BTC 15-minute Up/Down trade with full contrarian + near-fair logic."""
         slot_key = "BTC"
 
@@ -387,6 +387,7 @@ class Trader:
             trade_key=current_window,
             settlement_open=settlement_open,
             bet_size=size,
+            confidence_pct=confidence_pct,
         )
 
     # ------------------------------------------------------------------ #
@@ -544,6 +545,7 @@ class Trader:
                 trade_key=ticker,
                 settlement_open=settlement_open,
                 bet_size=size,
+                confidence_pct=decision.get("confidence_pct", 0.0),
             )
             traded = True
             break  # one trade per slot per poll cycle
@@ -565,9 +567,10 @@ class Trader:
         contract_price: float,
         kalshi_ticker: str,
         market_label: str,
-        trade_key,          # current_window (crypto) or ticker (sports/weather)
-        settlement_open,    # datetime (naive UTC) or None
+        trade_key,              # current_window (crypto) or ticker (sports/weather)
+        settlement_open,        # datetime (naive UTC) or None
         bet_size: float = 0.0,  # clean dollar amount before fees, for Discord display
+        confidence_pct: float = 0.0,  # model confidence (0.0–100.0%)
     ):
         """
         Place the order (real or simulated), record the trade, and spawn
@@ -620,6 +623,7 @@ class Trader:
             contracts=contracts,
             contracts_filled=contracts_filled,
             contract_price_pct=price_pct,
+            confidence_pct=confidence_pct,
             cost=total_cost,
             possible_payout=payout,
             btc_price=live_price,
@@ -629,7 +633,7 @@ class Trader:
             market_label=market_label,
         )
 
-        log_trade(direction, contract_price, total_cost)
+        log_trade(direction, contract_price, total_cost, confidence_pct=confidence_pct)
         self.monitor.record_order_placed()
         self.discord.buy(
             direction=direction,

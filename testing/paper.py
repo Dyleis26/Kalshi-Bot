@@ -11,7 +11,7 @@ from administration.discord import Discord
 from administration.config import (
     STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, SLOTS,
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, NEWS_ENABLED,
-    BET_NEAR_FAIR, BET_SLIGHT_LEAN, BET_MOD_LEAN, BET_STRONG_LEAN,
+    SLOT_CAPITAL_PCT, BET_PCT_OF_SLOT, NUM_SLOTS,
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
     MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS, SPORTS_INGAME_COOLOFF_MINS,
@@ -362,22 +362,16 @@ class Trader:
         side           = "yes" if direction == LONG else "no"
         contract_price = yes_price if direction == LONG else no_price
 
-        # Kelly-optimal sizing
-        distance = abs(contract_price - 0.50)
-        if distance <= 0.05:
-            size = BET_NEAR_FAIR
-        elif distance <= 0.10:
-            size = BET_SLIGHT_LEAN
-        elif distance <= 0.15:
-            size = BET_MOD_LEAN
-        else:
-            size = BET_STRONG_LEAN
-
+        # Dynamic sizing: 25% of this slot's 10% capital allocation.
+        # Rebalances automatically after every trade since portfolio.capital is live.
         with self._lock:
+            slot_capital = self.portfolio.capital * SLOT_CAPITAL_PCT
             consec = self._consec_losses[slot_key]
+        size = round(slot_capital * BET_PCT_OF_SLOT, 2)
         if consec >= CONSEC_LOSS_THRESHOLD:
             size = round(size * CONSEC_LOSS_REDUCTION, 2)
             logger.info(f"BTC: cooldown active ({consec} consecutive losses) — bet reduced to ${size:.2f}")
+        logger.debug(f"BTC: sizing — capital=${self.portfolio.capital:.2f} slot=${slot_capital:.2f} bet=${size:.2f}")
 
         contracts = math.floor(size / contract_price)
         if contracts < 1:
@@ -540,22 +534,16 @@ class Trader:
             no_ask         = float(market.get("no_ask_dollars", 0.5))
             contract_price = yes_ask if direction == LONG else no_ask
 
-            # Sizing tiers
-            distance = abs(contract_price - 0.50)
-            if distance <= 0.05:
-                size = BET_NEAR_FAIR
-            elif distance <= 0.10:
-                size = BET_SLIGHT_LEAN
-            elif distance <= 0.15:
-                size = BET_MOD_LEAN
-            else:
-                size = BET_STRONG_LEAN
-
+            # Dynamic sizing: 25% of this slot's 10% capital allocation.
+            # Rebalances automatically — portfolio.capital is live after every trade.
             with self._lock:
+                slot_capital = self.portfolio.capital * SLOT_CAPITAL_PCT
                 consec = self._consec_losses[slot_key]
+            size = round(slot_capital * BET_PCT_OF_SLOT, 2)
             if consec >= CONSEC_LOSS_THRESHOLD:
                 size = round(size * CONSEC_LOSS_REDUCTION, 2)
                 logger.info(f"{slot_key}: cooldown active ({consec} consecutive losses) — bet reduced to ${size:.2f}")
+            logger.debug(f"{slot_key}: sizing — capital=${self.portfolio.capital:.2f} slot=${slot_capital:.2f} bet=${size:.2f}")
 
             contracts = math.floor(size / contract_price)
             if contracts < 1:
@@ -1077,6 +1065,19 @@ class Trader:
                     continue
                 elapsed = 0
                 self.monitor.print_status()
+
+                # Portfolio breakdown — logged every heartbeat so cash/capital are always visible
+                with self._lock:
+                    p = self.portfolio
+                    slot_cap = round(p.capital * SLOT_CAPITAL_PCT, 2)
+                    bet_size = round(slot_cap * BET_PCT_OF_SLOT, 2)
+                logger.info(
+                    f"PORTFOLIO | total=${p.total:.2f} | "
+                    f"cash=${p.cash:.2f} ({p.cash/p.total*100:.1f}%) [locked] | "
+                    f"capital=${p.capital:.2f} ({p.capital/p.total*100:.1f}%) | "
+                    f"per-slot=${slot_cap:.2f} | per-trade=${bet_size:.2f} | "
+                    f"pnl=${p.daily_pnl:+.2f}"
+                )
 
                 if NEWS_ENABLED:
                     t = threading.Thread(

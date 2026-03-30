@@ -124,14 +124,21 @@ MIN_BET = 3.00              # Kelly floor — market very confident (YES outside
 MAX_LOSING_STREAK = 999     # Data collection: disabled
 LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 
-# --- Bet Sizing — $10 flat (accuracy testing mode) ---
-# All four tiers set to $10 to measure model accuracy without sizing noise.
-# When accuracy data is sufficient, restore tiered sizing:
-#   BET_MOD_LEAN = 5.00, BET_STRONG_LEAN = 5.00
-BET_NEAR_FAIR   = 10.00   # YES 0.40–0.60: near-fair zone
-BET_SLIGHT_LEAN = 10.00   # YES 0.35–0.40 / 0.60–0.65: slight lean
-BET_MOD_LEAN    = 10.00   # YES 0.35–0.65: moderate lean
-BET_STRONG_LEAN = 10.00   # YES outside 0.35–0.65: strong lean
+# --- Bet Sizing (percentage-based, dynamic) ---
+# Each trade = BET_PCT_OF_SLOT × slot_capital
+#            = BET_PCT_OF_SLOT × (portfolio.capital × SLOT_CAPITAL_PCT)
+#
+# With $250 starting balance:
+#   capital = $125  →  slot_capital = $12.50  →  bet = $3.13
+#
+# After every trade portfolio.capital updates automatically, so bet size
+# self-adjusts without any separate rebalance step:
+#   win  → capital grows  → next bet slightly larger
+#   loss → capital shrinks → next bet slightly smaller
+#   cash is NEVER used for losses (record_loss touches capital only)
+#
+SLOT_CAPITAL_PCT = 0.10   # 10% of capital pool per slot (capital ÷ NUM_SLOTS)
+BET_PCT_OF_SLOT  = 0.25   # 25% of slot's capital allocation per trade
 
 # --- Kalshi Contract Price Filter (near-fair zone) ---
 # Only trade when YES is in this range — outside it the payout asymmetry makes

@@ -78,7 +78,7 @@ NUM_SLOTS = len(SLOTS)  # 5 — one capital slot per market type
 MARKET_EVAL_INTERVAL_SECS = 120   # Poll weather/sports slots every 2 minutes (faster in-game edge capture)
 # Weather close_time is ~30h away (next-day markets); sports close_time is weeks away (settlement).
 # Sports slots use game_date_filter (ticker date) instead — this value only matters for weather.
-SPORTS_EDGE_MIN            = 0.08  # Need ≥8% edge over Kalshi YES price to enter
+SPORTS_EDGE_MIN            = 0.10  # Need ≥10% edge over Kalshi YES price to enter
 SPORTS_CONTRACT_PRICE_MIN  = 0.20  # Broader range for in-game (pre-game uses 0.35)
 SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game favorites can be 0.80+ and still have edge
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
@@ -95,15 +95,16 @@ INTERVALS = {
 CANDLE_LIMIT = 200    # Historical candles to load on startup
 
 # --- Strategy Thresholds ---
-RSI_BULL = 53         # 1H RSI above this = bullish bias (tighter neutral zone)
-RSI_BEAR = 47         # 1H RSI below this = bearish bias
+RSI_BULL = 55         # 1H RSI above this = bullish bias
+RSI_BEAR = 45         # 1H RSI below this = bearish bias
 RSI_PERIOD = 14
-MOMENTUM_MIN = 0.0005   # Minimum 0.05% price move to be directional
+MOMENTUM_MIN = 0.001    # Minimum 0.10% price move to be directional (was 0.05% — too noisy)
 MOMENTUM_LOOKBACK = 3   # Candles to look back for momentum (3 × 15m = 45 min)
-MACD_MIN = 0.0001       # Neutral deadband: histogram must exceed 0.01% of price to count
+MACD_MIN = 0.0003       # Neutral deadband: histogram must exceed 0.03% of price to count
                         # Normalized by current price in signals.py so it works across all assets
-MIN_CONFIDENCE = 4    # All 4 signals must agree to enter
-FORCE_TRADE = True    # Data collection mode: majority vote, trades every window
+VWAP_MIN_PCT = 0.001    # Price must be 0.10%+ away from VWAP to count as directional
+MIN_CONFIDENCE = 4    # Minimum votes (out of 7) to enter — requires real confluence
+FORCE_TRADE = False   # Only trade when MIN_CONFIDENCE signals agree; skip uncertain windows
 
 # --- Execution ---
 LIMIT_ORDER_OFFSET = 0.02   # Place limit 2 cents below ask

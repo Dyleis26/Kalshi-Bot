@@ -111,10 +111,11 @@ def vwap(df: pd.DataFrame, window: int = 96) -> float:
 
 
 def vwap_bias(current_price: float, vwap_val: float) -> str:
-    """Returns 'bull' if price is above VWAP, 'bear' if below."""
-    if current_price > vwap_val:
+    """Returns 'bull'/'bear' only if price is ≥VWAP_MIN_PCT away from VWAP; else neutral."""
+    pct_diff = (current_price - vwap_val) / vwap_val
+    if pct_diff > cfg.VWAP_MIN_PCT:
         return "bull"
-    elif current_price < vwap_val:
+    elif pct_diff < -cfg.VWAP_MIN_PCT:
         return "bear"
     return "neutral"
 

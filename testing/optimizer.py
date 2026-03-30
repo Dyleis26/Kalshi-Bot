@@ -16,10 +16,9 @@ CONFIGS_DIR = os.path.join(os.path.dirname(__file__), "..", "strategy", "configs
 # ------------------------------------------------------------------ #
 
 DEFAULT_GRID = {
-    "RSI_BULL":      [52, 55, 58, 60],
-    "RSI_BEAR":      [40, 42, 45, 48],
-    "MOMENTUM_MIN":  [0.0002, 0.0005, 0.001, 0.002],
-    "KELLY_FRACTION":[0.10, 0.15, 0.20, 0.25],
+    "RSI_BULL":     [52, 55, 58, 60],
+    "RSI_BEAR":     [40, 42, 45, 48],
+    "MOMENTUM_MIN": [0.0002, 0.0005, 0.001, 0.002],
 }
 
 
@@ -49,6 +48,9 @@ class Optimizer:
         combinations = list(itertools.product(*grid.values()))
         keys = list(grid.keys())
         total = len(combinations)
+
+        # Save originals before any param overrides so _restore_defaults is accurate
+        self._saved_defaults = {k: getattr(cfg, k) for k in keys if hasattr(cfg, k)}
 
         logger.info(f"RBI Optimizer starting — {total} combinations to test")
 
@@ -101,11 +103,9 @@ class Optimizer:
             setattr(cfg, key, val)
 
     def _restore_defaults(self):
-        """Restore original config values after all runs."""
-        cfg.RSI_BULL       = 55
-        cfg.RSI_BEAR       = 45
-        cfg.MOMENTUM_MIN   = 0.0005
-        cfg.KELLY_FRACTION = 0.20
+        """Restore original config values saved at the start of run()."""
+        for key, val in self._saved_defaults.items():
+            setattr(cfg, key, val)
 
     def _save_configs(self, top: list, rank_by: str):
         """Save top configs to JSON files in strategy/configs/."""
@@ -130,9 +130,8 @@ class Optimizer:
             p = r["params"]
             m = r["metrics"]
             print(f"\n  Rank #{i}")
-            print(f"    RSI Bull/Bear:  {p['RSI_BULL']} / {p['RSI_BEAR']}")
-            print(f"    Momentum Min:   {p['MOMENTUM_MIN']}")
-            print(f"    Kelly Fraction: {p['KELLY_FRACTION']}")
+            for k, v in p.items():
+                print(f"    {k}: {v}")
             print(f"    Sharpe:         {m['sharpe']:.4f}")
             print(f"    Win Rate:       {m['win_rate_pct']}")
             print(f"    Total PnL:      ${m['total_pnl']:+.2f}")

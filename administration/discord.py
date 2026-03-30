@@ -167,4 +167,4 @@ def _format_date(dt: datetime) -> str:
 
 
 def _format_time(dt: datetime) -> str:
-    return dt.strftime("%-I:%M %p")
+    return dt.strftime("%I:%M %p").lstrip("0")

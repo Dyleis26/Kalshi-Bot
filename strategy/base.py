@@ -149,6 +149,6 @@ class Strategy:
     # ------------------------------------------------------------------ #
 
     def size(self, confidence: int = 3) -> float:
-        """Flat $5 per trade — all windows equal size."""
+        """Returns MIN_BET floor ($3.00). Used by backtest only — paper.py uses dynamic capital-based sizing."""
         return MIN_BET
 

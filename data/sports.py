@@ -20,7 +20,7 @@ from typing import Optional
 
 logger = logging.getLogger("sports")
 
-CACHE_TTL_SECS = 180   # 3-minute TTL — live win probabilities change quickly
+CACHE_TTL_SECS = 60    # 1-minute TTL — must be < MARKET_EVAL_INTERVAL_SECS (120s) to stay fresh
 
 _cache: dict = {}
 
@@ -279,7 +279,7 @@ def find_matching_game(games: list[dict], market_title: str) -> Optional[dict]:
             best_score = score
             best_game = game
 
-    if best_score >= 2:
+    if best_score >= 4:
         return best_game
     return None
 

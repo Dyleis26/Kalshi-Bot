@@ -436,7 +436,13 @@ def get_espn_injuries(team_id: str, espn_sport: str) -> list[str]:
     if not sport_info:
         return []
     sport, league = sport_info
-    year = date.today().year
+    today = date.today()
+    # NBA/NHL seasons span calendar years (Oct–Jun). In Jan–Jun the season year is the prior year.
+    # MLB season runs Apr–Oct so current year is always correct.
+    if league in ("nba", "nhl") and today.month <= 6:
+        year = today.year - 1
+    else:
+        year = today.year
 
     try:
         resp = requests.get(

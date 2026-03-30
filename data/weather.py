@@ -195,7 +195,7 @@ def get_open_meteo(lat: float, lng: float, city: str = "") -> Optional[dict]:
             "high_temp_f": round(high_f, 1) if high_f is not None else None,
             "precip_pct":  round(precip_p, 4),
             "short_desc":  "Open-Meteo ECMWF",
-            "period_name": "Today",
+            "period_name": "Tomorrow",
             "fetched_at":  datetime.now(timezone.utc).isoformat(),
             "_fetched_ts": now_ts,
         }

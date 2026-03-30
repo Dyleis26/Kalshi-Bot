@@ -1,6 +1,10 @@
+import math
 import pandas as pd
 from administration.portfolio import Portfolio
-from administration.config import STARTING_BALANCE, KALSHI_TAKER_FEE, KALSHI_MAKER_FEE
+from administration.config import (
+    STARTING_BALANCE, KALSHI_TAKER_FEE, KALSHI_MAKER_FEE,
+    SLOT_CAPITAL_PCT, BET_PCT_OF_SLOT,
+)
 from strategy.base import Strategy, LONG, SHORT, NONE
 from testing.metrics import calculate, print_summary
 from administration.logger import get as get_logger
@@ -61,7 +65,7 @@ class Backtest:
                 current_day = candle_date
                 self.portfolio.reset_day()
 
-            df_1h_window = self.df_1h[self.df_1h["time"] <= candle_time]
+            df_1h_window = self.df_1h[pd.to_datetime(self.df_1h["time"]) <= pd.Timestamp(candle_time)]
 
             if len(df_1h_window) < MIN_1H_CANDLES:
                 skipped += 1
@@ -81,9 +85,12 @@ class Backtest:
             if direction == NONE:
                 continue
 
-            # Simulate trade
+            # Simulate trade — use same dynamic sizing as paper.py
             contract_price = self._estimate_contract_price(direction, candle)
-            size = self.strategy.size()
+            size = round(self.portfolio.capital * SLOT_CAPITAL_PCT * BET_PCT_OF_SLOT, 2)
+            if math.floor(size / contract_price) < 1:
+                skipped += 1
+                continue
 
             # Determine outcome on the next candle (i+1)
             outcome = self._resolve_outcome(direction, i)
@@ -141,6 +148,10 @@ class Backtest:
         """
         Estimate contract price. In a real market this is the YES ask price.
         For backtesting, we assume near-50 cent pricing as a conservative default.
+
+        Note: paper.py skips markets where YES is outside [CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX]
+        (default 0.35–0.65). This filter is not simulated here since historical Kalshi prices
+        are not available — backtest trade counts will be higher than live trading.
         """
         return 0.50
 
@@ -154,11 +165,12 @@ class Backtest:
         Win:  contracts × $1.00 - size - fee_entry
         Loss: -size - fee_entry
         """
-        contracts = size / contract_price
+        contracts = math.floor(size / contract_price)
+        actual_cost = contracts * contract_price
         fee = self.fee_rate * contracts * min(contract_price, 1 - contract_price)
 
         if outcome == "win":
             gross = contracts * 1.00
-            return round(gross - size - fee, 4)
+            return round(gross - actual_cost - fee, 4)
         else:
-            return round(-size - fee, 4)
+            return round(-actual_cost - fee, 4)

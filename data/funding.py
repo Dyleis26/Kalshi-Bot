@@ -1,7 +1,9 @@
 """
-funding.py — Binance perpetual futures funding rate fetcher.
+funding.py — Perpetual futures funding rate fetcher (Bybit primary, OKX fallback).
 
-Uses the Binance USDT perpetuals API (public endpoint, no key required).
+Binance blocks certain VPS IPs with HTTP 451. Bybit and OKX both offer the same
+funding rate data on public endpoints with no authentication required.
+
 Returns the current 8-hour funding rate as a contrarian signal:
 
   rate > +threshold: market is net long (longs pay shorts)
@@ -32,18 +34,68 @@ logger = logging.getLogger("funding")
 CACHE_TTL_SECS = 300   # 5-minute TTL — funding rate is stable between cycles
 _cache: dict = {}
 
-BINANCE_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
+BYBIT_URL = "https://api.bybit.com/v5/market/tickers"
+OKX_URL   = "https://www.okx.com/api/v5/public/funding-rate"
+
+# Symbol mapping: internal (Binance-style) → exchange-specific
+_BYBIT_SYMBOL = {"BTCUSDT": "BTCUSDT", "ETHUSDT": "ETHUSDT"}
+_OKX_SYMBOL   = {"BTCUSDT": "BTC-USD-SWAP", "ETHUSDT": "ETH-USD-SWAP"}
+
+
+def _fetch_bybit(symbol: str) -> float | None:
+    """Fetch funding rate from Bybit V5. Returns float or None on error."""
+    bybit_sym = _BYBIT_SYMBOL.get(symbol, symbol)
+    try:
+        resp = requests.get(
+            BYBIT_URL,
+            params={"category": "linear", "symbol": bybit_sym},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"Bybit funding rate HTTP {resp.status_code}")
+            return None
+        data = resp.json()
+        items = data.get("result", {}).get("list", [])
+        if not items:
+            return None
+        return float(items[0].get("fundingRate", 0))
+    except Exception as e:
+        logger.warning(f"Bybit funding rate error ({symbol}): {e}")
+        return None
+
+
+def _fetch_okx(symbol: str) -> float | None:
+    """Fetch funding rate from OKX. Returns float or None on error."""
+    okx_sym = _OKX_SYMBOL.get(symbol, symbol)
+    try:
+        resp = requests.get(
+            OKX_URL,
+            params={"instId": okx_sym},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"OKX funding rate HTTP {resp.status_code}")
+            return None
+        data = resp.json()
+        items = data.get("data", [])
+        if not items:
+            return None
+        return float(items[0].get("fundingRate", 0))
+    except Exception as e:
+        logger.warning(f"OKX funding rate error ({symbol}): {e}")
+        return None
 
 
 def get_funding_rate(symbol: str = "BTCUSDT") -> dict | None:
     """
     Fetch the current perpetual funding rate for the given symbol.
+    Tries Bybit first, falls back to OKX if Bybit is unavailable.
 
     Returns:
         {
           "symbol":       str,   # e.g. "BTCUSDT"
           "funding_rate": float, # positive → longs paying (market net long)
-          "mark_price":   float,
+          "source":       str,   # "bybit" or "okx"
           "fetched_at":   str,
         }
     Returns None on any error.
@@ -52,30 +104,26 @@ def get_funding_rate(symbol: str = "BTCUSDT") -> dict | None:
     if symbol in _cache and now_ts - _cache[symbol]["_ts"] < CACHE_TTL_SECS:
         return _cache[symbol]
 
-    try:
-        resp = requests.get(BINANCE_URL, params={"symbol": symbol}, timeout=10)
-        if resp.status_code != 200:
-            logger.warning(f"Binance funding rate HTTP {resp.status_code}")
-            return None
+    rate = _fetch_bybit(symbol)
+    source = "bybit"
 
-        data = resp.json()
-        rate = float(data.get("lastFundingRate", 0))
-        mark = float(data.get("markPrice", 0))
+    if rate is None:
+        rate = _fetch_okx(symbol)
+        source = "okx"
 
-        result = {
-            "symbol":       symbol,
-            "funding_rate": round(rate, 8),
-            "mark_price":   round(mark, 2),
-            "fetched_at":   datetime.now(timezone.utc).isoformat(),
-            "_ts":          now_ts,
-        }
-        _cache[symbol] = result
-        logger.debug(f"Funding rate {symbol}: {rate:+.6f} (mark={mark:.2f})")
-        return result
-
-    except Exception as e:
-        logger.warning(f"Binance funding rate fetch error ({symbol}): {e}")
+    if rate is None:
         return None
+
+    result = {
+        "symbol":       symbol,
+        "funding_rate": round(rate, 8),
+        "source":       source,
+        "fetched_at":   datetime.now(timezone.utc).isoformat(),
+        "_ts":          now_ts,
+    }
+    _cache[symbol] = result
+    logger.debug(f"Funding rate {symbol}: {rate:+.6f} (source={source})")
+    return result
 
 
 def get_funding_bias(rate: float, bull_threshold: float, bear_threshold: float) -> str:

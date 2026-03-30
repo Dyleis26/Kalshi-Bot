@@ -206,11 +206,12 @@ class KalshiClient:
         First check is immediate — most markets settle within 5-10s of window close.
         Returns None if it never settles in time.
         """
-        for _ in range(retries):
+        for i in range(retries):
             m = self.get_market(ticker)
             if m and m.get("result") in ("yes", "no"):
                 return m["result"]
-            time.sleep(delay)
+            if i < retries - 1:
+                time.sleep(delay)
         return None
 
     def get_orderbook(self, ticker: str):

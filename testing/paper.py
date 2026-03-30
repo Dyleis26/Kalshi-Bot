@@ -182,7 +182,8 @@ class Trader:
 
     def _on_tick(self, asset: str, price: float):
         if asset == "BTC":
-            self.btc_state["price"] = price
+            with self._lock:
+                self.btc_state["price"] = price
 
     # ------------------------------------------------------------------ #
     #  BTC Crypto Evaluation                                               #

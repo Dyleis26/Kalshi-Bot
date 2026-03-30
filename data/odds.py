@@ -27,6 +27,7 @@ logger = logging.getLogger("odds")
 CACHE_TTL_SECS = 1800  # 30-minute cache — pre-game lines move slowly
 
 _cache: dict = {}
+_opening_lines: dict = {}  # Persistent — never expires; stores first-seen home_win_pct per game
 
 BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
@@ -89,6 +90,14 @@ def get_odds(espn_sport: str, api_key: str) -> list[dict]:
             return []
 
         games = [g for e in resp.json() if (g := _parse_event(e)) is not None]
+
+        # Track opening line (first-seen price) per game for line-movement detection
+        for g in games:
+            key = f"{sport_key}|{g['home_team']}|{g['away_team']}"
+            if key not in _opening_lines:
+                _opening_lines[key] = g["home_win_pct"]
+            g["line_movement"] = round(g["home_win_pct"] - _opening_lines[key], 4)
+
         _cache[sport_key] = {"games": games, "_ts": now_ts}
 
         remaining = resp.headers.get("x-requests-remaining", "?")
@@ -173,4 +182,7 @@ def find_matching_odds(odds_games: list[dict], home_abbr: str, away_abbr: str,
         if score > best_score:
             best_score, best = score, g
 
-    return best if best_score >= 4 else None
+    if best_score < 4:
+        return None
+    # line_movement was already injected into the game dict by get_odds()
+    return best

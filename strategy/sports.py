@@ -21,6 +21,7 @@ from data.mlb_stats import get_mlb_win_probability
 from data.team_stats import (
     get_nhl_standings, get_mlb_standings,
     get_espn_l10, get_espn_h2h,
+    get_nhl_starting_goalies, get_espn_injuries, get_mlb_ballpark_wind,
 )
 from administration.config import (
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX,
@@ -73,6 +74,13 @@ class SportsStrategy:
 
         is_live = (game.get("status") == "in")
 
+        # Score mismatch safety check — skip if NHL sources disagree by >1 goal
+        if game.get("score_mismatch"):
+            return _no_trade(
+                f"NHL score mismatch between ESPN and NHL API — skipping until resolved",
+                yes_ask, sport_label, title,
+            )
+
         # Price range filter: wider for in-game (live markets can be 0.20–0.80+)
         price_min = SPORTS_CONTRACT_PRICE_MIN if is_live else CONTRACT_PRICE_MIN
         price_max = SPORTS_CONTRACT_PRICE_MAX if is_live else CONTRACT_PRICE_MAX
@@ -85,6 +93,7 @@ class SportsStrategy:
         #   In-game NBA   → Gaussian model + play-by-play momentum adjustment
         #   In-game NHL   → Gaussian scoring model
         #   Pre-game      → The Odds API (sharp sportsbook lines) → ESPN fallback
+        line_movement = 0.0  # only populated for pre-game via Odds API
         if is_live:
             if espn_sport == "baseball/mlb":
                 mlb_result = get_mlb_win_probability(game["home_abbr"], game["away_abbr"])
@@ -129,8 +138,10 @@ class SportsStrategy:
                 home_p = game["home_win_pct"]
                 away_p = game["away_win_pct"]
                 prob_source = "ESPN pre-game"
+                line_movement = 0.0
             else:
                 prob_source = f"OddsAPI/{odds_source}"
+                line_movement = odds_match.get("line_movement", 0.0) if odds_match else 0.0
 
         # Determine which team is the YES outcome
         yes_team_win_pct = _resolve_yes_team_probability(
@@ -207,14 +218,58 @@ class SportsStrategy:
         # H2H season series (all sports via ESPN summary)
         h2h_series = get_espn_h2h(game.get("game_id", ""), espn_sport)
 
+        # ------------------------------------------------------------------ #
+        #  Additional context: goalies, injuries, wind, line movement         #
+        # ------------------------------------------------------------------ #
+
+        # NHL goalie confirmation (in-game and pre-game)
+        goalie_tag = ""
+        if espn_sport == "hockey/nhl":
+            goalies = get_nhl_starting_goalies(game.get("away_abbr", ""), game.get("home_abbr", ""))
+            if goalies.get("home_goalie") or goalies.get("away_goalie"):
+                goalie_tag = (
+                    f" | goalies: {game.get('home_abbr','')}={goalies.get('home_goalie','?')} "
+                    f"{game.get('away_abbr','')}={goalies.get('away_goalie','?')}"
+                )
+
+        # Injury report (all sports, pre-game only — in-game injuries already reflected in score)
+        home_injuries = away_injuries = []
+        if not is_live:
+            home_injuries = get_espn_injuries(game.get("home_team_id", ""), espn_sport)
+            away_injuries = get_espn_injuries(game.get("away_team_id", ""), espn_sport)
+            if home_injuries or away_injuries:
+                inj_parts = []
+                if home_injuries:
+                    inj_parts.append(f"{game.get('home_abbr','')}: {', '.join(home_injuries[:3])}")
+                if away_injuries:
+                    inj_parts.append(f"{game.get('away_abbr','')}: {', '.join(away_injuries[:3])}")
+                logger.info(f"Sports [{sport_label}] injuries: {' | '.join(inj_parts)}")
+
+        # MLB ballpark wind
+        wind_tag = ""
+        if espn_sport == "baseball/mlb":
+            wind = get_mlb_ballpark_wind(game.get("home_abbr", ""))
+            if wind and not wind.get("is_indoor"):
+                wind_tag = f" | wind: {wind.get('wind_mph',0):.0f}mph {wind.get('wind_dir','')}"
+                if wind.get("is_high"):
+                    wind_tag += " ⚠️HIGH"
+
+        # Line movement (pre-game only, from Odds API)
+        line_tag = ""
+        if line_movement and abs(line_movement) >= 0.03:
+            direction_str = "toward home" if line_movement > 0 else "away from home"
+            line_tag = f" | line moved {line_movement:+.2f} ({direction_str})"
+
         # Log context line for all pre-game trades
         if not is_live:
             logger.info(
                 f"Sports [{sport_label}] context: "
                 f"home {game.get('home_abbr','')} {home_record} (home {home_home_record}, L10 {home_l10}) | "
                 f"away {game.get('away_abbr','')} {away_record} (road {away_road_record}, L10 {away_l10}) | "
-                f"H2H: {h2h_series or 'n/a'}"
+                f"H2H: {h2h_series or 'n/a'}{goalie_tag}{wind_tag}{line_tag}"
             )
+        elif goalie_tag or wind_tag:
+            logger.info(f"Sports [{sport_label}] context: {game.get('home_abbr','')}-{game.get('away_abbr','')}{goalie_tag}{wind_tag}")
 
         src = prob_source + momentum_tag
         if edge >= SPORTS_EDGE_MIN:

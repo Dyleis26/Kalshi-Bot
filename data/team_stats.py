@@ -26,10 +26,13 @@ logger = logging.getLogger("team_stats")
 
 _cache: dict = {}
 
-STANDINGS_TTL = 3600   # 1 h
-L10_TTL       = 1800   # 30 min
-H2H_TTL       = 3600   # 1 h
-NHL_LIVE_TTL  = 30     # 30 s — tight TTL for score cross-validation
+STANDINGS_TTL   = 3600   # 1 h
+L10_TTL         = 1800   # 30 min
+H2H_TTL         = 3600   # 1 h
+NHL_LIVE_TTL    = 30     # 30 s — tight TTL for score cross-validation
+NHL_GOALIE_TTL  = 300    # 5 min — goalie starters don't change mid-game
+INJURY_TTL      = 1800   # 30 min
+MLB_WIND_TTL    = 1800   # 30 min — NWS wind forecast
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 NHL_API   = "https://api-web.nhle.com/v1"
@@ -148,6 +151,7 @@ def get_nhl_live_scores() -> dict:
                 "period":     game.get("period", 0),
                 "clock":      clock.get("timeRemaining", ""),
                 "state":      game.get("gameState", ""),
+                "game_id":    game.get("id", 0),
             }
 
         _cache[cache_key] = {"data": result, "_ts": now_ts}
@@ -338,3 +342,245 @@ def format_record(wins: int, losses: int, otl: int = 0) -> str:
     if otl:
         return f"{wins}-{losses}-{otl}"
     return f"{wins}-{losses}"
+
+
+# --------------------------------------------------------------------------- #
+#  NHL Goalie                                                                   #
+# --------------------------------------------------------------------------- #
+
+def get_nhl_starting_goalies(away_abbr: str, home_abbr: str) -> dict:
+    """
+    Fetch the starting goalies for an NHL game via the official NHL API.
+
+    Uses /v1/score/now to find the game_id, then /v1/gamecenter/{id}/boxscore
+    to read the first (starting) goalie for each team.
+
+    Returns:
+        {
+          "home_goalie": "Andrei Vasilevskiy",
+          "away_goalie": "Jake Oettinger",
+        }
+    Returns {} on any error or if game not yet started.
+    """
+    cache_key = f"nhl_goalies_{away_abbr}@{home_abbr}"
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if cache_key in _cache and now_ts - _cache[cache_key]["_ts"] < NHL_GOALIE_TTL:
+        return _cache[cache_key]["data"]
+
+    # Get game_id from live scores dict (reuses the 30s-TTL live score fetch)
+    scores = get_nhl_live_scores()
+    nhl_key = f"{away_abbr}@{home_abbr}"
+    game_info = scores.get(nhl_key, {})
+    game_id = game_info.get("game_id")
+    if not game_id:
+        return {}
+
+    try:
+        resp = requests.get(f"{NHL_API}/gamecenter/{game_id}/boxscore", timeout=10)
+        if resp.status_code != 200:
+            return {}
+
+        data = resp.json()
+        home_team = data.get("homeTeam", {})
+        away_team = data.get("awayTeam", {})
+
+        def _first_goalie_name(team_dict: dict) -> str:
+            goalies = team_dict.get("goalies", [])
+            if not goalies:
+                return ""
+            g = goalies[0]
+            name = g.get("name", {})
+            return name.get("default", "") or f"{g.get('firstName',{}).get('default','')} {g.get('lastName',{}).get('default','')}".strip()
+
+        result = {
+            "home_goalie": _first_goalie_name(home_team),
+            "away_goalie": _first_goalie_name(away_team),
+        }
+        _cache[cache_key] = {"data": result, "_ts": now_ts}
+        return result
+
+    except Exception as e:
+        logger.debug(f"NHL goalie fetch error ({nhl_key}): {e}")
+        return {}
+
+
+# --------------------------------------------------------------------------- #
+#  Injury Feed                                                                  #
+# --------------------------------------------------------------------------- #
+
+# ESPN sport path → (sport, league) for the injuries endpoint
+_ESPN_INJURY_PATH = {
+    "baseball/mlb":   ("baseball",    "mlb"),
+    "basketball/nba": ("basketball",  "nba"),
+    "hockey/nhl":     ("hockey",      "nhl"),
+}
+
+
+def get_espn_injuries(team_id: str, espn_sport: str) -> list[str]:
+    """
+    Fetch the current injury report for a team from ESPN.
+
+    Returns a list of strings like ["Aaron Judge (OUT)", "Giancarlo Stanton (Doubtful)"]
+    for players with OUT, Doubtful, or Questionable status.
+    Returns [] on error or if no notable injuries.
+    """
+    if not team_id:
+        return []
+
+    cache_key = f"injuries_{espn_sport}_{team_id}"
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if cache_key in _cache and now_ts - _cache[cache_key]["_ts"] < INJURY_TTL:
+        return _cache[cache_key]["data"]
+
+    sport_info = _ESPN_INJURY_PATH.get(espn_sport)
+    if not sport_info:
+        return []
+    sport, league = sport_info
+    year = date.today().year
+
+    try:
+        resp = requests.get(
+            f"https://sports.core.api.espn.com/v2/sports/{sport}/leagues/{league}"
+            f"/seasons/{year}/teams/{team_id}/injuries",
+            params={"limit": 50},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            _cache[cache_key] = {"data": [], "_ts": now_ts}
+            return []
+
+        injuries = []
+        for item in resp.json().get("items", []):
+            status = item.get("status", "")
+            if status.lower() not in ("out", "doubtful", "questionable", "day-to-day"):
+                continue
+            athlete = item.get("athlete", {})
+            name    = athlete.get("displayName", athlete.get("shortName", "Unknown"))
+            injuries.append(f"{name} ({status})")
+
+        _cache[cache_key] = {"data": injuries, "_ts": now_ts}
+        return injuries
+
+    except Exception as e:
+        logger.debug(f"ESPN injury fetch error (team={team_id}, sport={espn_sport}): {e}")
+        _cache[cache_key] = {"data": [], "_ts": now_ts}
+        return []
+
+
+# --------------------------------------------------------------------------- #
+#  MLB Ballpark Wind                                                            #
+# --------------------------------------------------------------------------- #
+
+# MLB team abbreviation → (lat, lng) for each home ballpark
+_MLB_BALLPARKS: dict[str, tuple[float, float]] = {
+    "ARI": (33.445, -112.067),   # Chase Field, Phoenix
+    "ATL": (33.890,  -84.468),   # Truist Park, Atlanta
+    "BAL": (39.284,  -76.622),   # Oriole Park, Baltimore
+    "BOS": (42.347,  -71.097),   # Fenway Park, Boston
+    "CHC": (41.948,  -87.656),   # Wrigley Field, Chicago
+    "CWS": (41.830,  -87.634),   # Guaranteed Rate Field, Chicago
+    "CIN": (39.097,  -84.507),   # Great American Ball Park, Cincinnati
+    "CLE": (41.496,  -81.685),   # Progressive Field, Cleveland
+    "COL": (39.756, -104.994),   # Coors Field, Denver
+    "DET": (42.339,  -83.048),   # Comerica Park, Detroit
+    "HOU": (29.757,  -95.356),   # Minute Maid Park, Houston
+    "KC":  (39.051,  -94.480),   # Kauffman Stadium, Kansas City
+    "LAA": (33.800, -117.883),   # Angel Stadium, Anaheim
+    "LAD": (34.074, -118.240),   # Dodger Stadium, Los Angeles
+    "MIA": (25.778,  -80.220),   # loanDepot Park, Miami
+    "MIL": (43.028,  -87.971),   # American Family Field, Milwaukee
+    "MIN": (44.981,  -93.278),   # Target Field, Minneapolis
+    "NYM": (40.757,  -73.846),   # Citi Field, New York
+    "NYY": (40.829,  -73.926),   # Yankee Stadium, New York
+    "PHI": (39.906,  -75.166),   # Citizens Bank Park, Philadelphia
+    "PIT": (40.447,  -80.006),   # PNC Park, Pittsburgh
+    "SD":  (32.707, -117.157),   # Petco Park, San Diego
+    "SF":  (37.778, -122.389),   # Oracle Park, San Francisco
+    "SEA": (47.591, -122.333),   # T-Mobile Park, Seattle
+    "STL": (38.623,  -90.193),   # Busch Stadium, St. Louis
+    "TB":  (27.768,  -82.653),   # Tropicana Field (indoor — wind irrelevant)
+    "TEX": (32.747,  -97.083),   # Globe Life Field (retractable roof)
+    "WSH": (38.873,  -77.007),   # Nationals Park, Washington DC
+    # Toronto and Oakland not covered (NWS US-only)
+}
+
+# Parks with roofs — wind data not meaningful
+_INDOOR_PARKS = {"TB", "TEX", "MIA", "MIL", "HOU", "MIN", "ARI"}
+
+
+def get_mlb_ballpark_wind(home_abbr: str) -> dict:
+    """
+    Fetch current wind conditions at an MLB ballpark using NWS hourly forecast.
+
+    Returns:
+        {
+          "wind_mph":    float,   # Wind speed in mph
+          "wind_dir":    str,     # Direction e.g. "NE", "SW"
+          "is_high":     bool,    # True if wind_mph >= 15 (affects scoring significantly)
+          "is_indoor":   bool,    # True if park has roof (wind irrelevant)
+        }
+    Returns {} on error or unsupported team (Toronto, Oakland).
+    """
+    if home_abbr in _INDOOR_PARKS:
+        return {"wind_mph": 0.0, "wind_dir": "N/A", "is_high": False, "is_indoor": True}
+
+    coords = _MLB_BALLPARKS.get(home_abbr)
+    if not coords:
+        return {}  # Team not in lookup (TOR, OAK) — NWS US-only
+
+    lat, lng = coords
+    cache_key = f"mlb_wind_{home_abbr}"
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if cache_key in _cache and now_ts - _cache[cache_key]["_ts"] < MLB_WIND_TTL:
+        return _cache[cache_key]["data"]
+
+    try:
+        # Step 1: resolve NWS grid from lat/lng
+        pts_resp = requests.get(
+            f"https://api.weather.gov/points/{lat:.4f},{lng:.4f}",
+            headers={"User-Agent": "KalshiBot/1.0"},
+            timeout=10,
+        )
+        if pts_resp.status_code != 200:
+            return {}
+
+        props = pts_resp.json().get("properties", {})
+        hourly_url = props.get("forecastHourly")
+        if not hourly_url:
+            return {}
+
+        # Step 2: fetch hourly forecast
+        fc_resp = requests.get(
+            hourly_url,
+            headers={"User-Agent": "KalshiBot/1.0"},
+            timeout=10,
+        )
+        if fc_resp.status_code != 200:
+            return {}
+
+        periods = fc_resp.json().get("properties", {}).get("periods", [])
+        if not periods:
+            return {}
+
+        # Use the first (current or upcoming) period
+        p = periods[0]
+        wind_str = p.get("windSpeed", "0 mph")   # e.g. "12 mph" or "12 to 17 mph"
+        wind_dir = p.get("windDirection", "")
+
+        # Parse mph — take the high end if it's a range
+        import re
+        nums = re.findall(r"\d+", wind_str)
+        wind_mph = float(max(int(n) for n in nums)) if nums else 0.0
+
+        result = {
+            "wind_mph":  wind_mph,
+            "wind_dir":  wind_dir,
+            "is_high":   wind_mph >= 15,
+            "is_indoor": False,
+        }
+        _cache[cache_key] = {"data": result, "_ts": now_ts}
+        return result
+
+    except Exception as e:
+        logger.debug(f"MLB wind fetch error ({home_abbr}): {e}")
+        return {}

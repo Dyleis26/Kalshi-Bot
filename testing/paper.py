@@ -15,6 +15,7 @@ from administration.config import (
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
     MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS, SPORTS_INGAME_COOLOFF_MINS,
+    INGAME_STALE_MARKET_SECS,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -90,6 +91,10 @@ class Trader:
 
         # Last non-crypto poll timestamp
         self._last_market_poll = 0.0
+
+        # Stale market filter: track last YES price change time per ticker
+        # Format: {ticker: {"price": float, "last_changed": monotonic_time}}
+        self._market_price_seen: dict = {}
 
         self.running      = False
         self._stopped     = False
@@ -426,8 +431,9 @@ class Trader:
         """
         Evaluate a single non-crypto market slot:
         1. Discover open Kalshi markets closing within MARKET_MAX_CLOSE_HOURS
-        2. For each market, get external signal (NWS / ESPN)
-        3. If edge >= threshold, execute trade
+        2. Evaluate ALL markets, collect candidates that pass all guards
+        3. Sort candidates by confidence descending (priority queue — best edge first)
+        4. Execute the highest-confidence trade
         """
         if time.monotonic() < self._ready_at:
             return
@@ -452,12 +458,28 @@ class Trader:
             return
 
         slot_type = slot_cfg["type"]
-        traded = False
+
+        # --- Phase 1: evaluate ALL markets, collect valid candidates ---
+        candidates = []
+        now_mono = time.monotonic()
 
         for market in markets:
             ticker = market.get("ticker")
             if not ticker:
                 continue
+
+            yes_ask = float(market.get("yes_ask_dollars", 0.5))
+            if not (0.05 <= yes_ask <= 0.95):
+                continue
+
+            # Stale market filter: skip in-game markets whose Kalshi price hasn't
+            # changed in > INGAME_STALE_MARKET_SECS (price is stuck, not a real edge).
+            seen = self._market_price_seen.get(ticker)
+            if seen:
+                if seen["price"] != yes_ask:
+                    self._market_price_seen[ticker] = {"price": yes_ask, "last_changed": now_mono}
+            else:
+                self._market_price_seen[ticker] = {"price": yes_ask, "last_changed": now_mono}
 
             # Pre-entry re-entry guard for weather (one trade per market)
             if slot_type != "sports":
@@ -483,37 +505,42 @@ class Trader:
             else:
                 continue
 
-            direction    = decision["direction"]
-            market_label = decision.get("market_label", slot_key)
-            is_ingame    = decision.get("is_ingame", False)
+            direction = decision["direction"]
+            is_ingame = decision.get("is_ingame", False)
 
             if direction == NONE:
                 logger.info(f"{slot_key} [{ticker}]: no trade — {decision['reason']}")
                 continue
 
+            # Stale market guard (apply only to in-game sports markets)
+            if is_ingame and slot_type == "sports":
+                stale_info = self._market_price_seen.get(ticker, {})
+                age = now_mono - stale_info.get("last_changed", now_mono)
+                if age > INGAME_STALE_MARKET_SECS:
+                    logger.info(
+                        f"{slot_key} [{ticker}]: stale market — YES={yes_ask:.2f} "
+                        f"unchanged {int(age//60)}m — skipping"
+                    )
+                    continue
+
             # Post-decision re-entry guard for sports
             if slot_type == "sports":
-                # Use game-level key (strip team suffix) so both team markets in the
-                # same game share the same cooloff (e.g. BOSATL-BOS and BOSATL-ATL
-                # both map to BOSATL, preventing duplicate trades on the same game).
+                # Game-level key prevents duplicate trades on both team markets
+                # (e.g. BOSATL-BOS and BOSATL-ATL map to BOSATL)
                 game_key = ticker.rsplit('-', 1)[0] if ticker.count('-') >= 2 else ticker
                 cooloff_secs = SPORTS_INGAME_COOLOFF_MINS * 60 if is_ingame else 86400
                 with self._lock:
                     last_t = self._ingame_trade_times.get(game_key, 0)
-                    since  = time.monotonic() - last_t
+                    since  = now_mono - last_t
                     if since < cooloff_secs:
                         tag = f"{int(since//60)}m/{SPORTS_INGAME_COOLOFF_MINS}m" if is_ingame else "pre-game once-only"
                         logger.info(f"{slot_key}: re-entry blocked on {ticker} ({tag} cooloff)")
                         continue
 
-            yes_ask = float(market.get("yes_ask_dollars", 0.5))
-            no_ask  = float(market.get("no_ask_dollars",  0.5))
-            if not (0.05 <= yes_ask <= 0.95):
-                continue
-
+            no_ask         = float(market.get("no_ask_dollars", 0.5))
             contract_price = yes_ask if direction == LONG else no_ask
 
-            # Kelly sizing — same tiers as crypto
+            # Sizing tiers
             distance = abs(contract_price - 0.50)
             if distance <= 0.05:
                 size = BET_NEAR_FAIR
@@ -534,7 +561,6 @@ class Trader:
             if contracts < 1:
                 continue
 
-            # Use market close_time as proxy for settlement
             close_str = market.get("close_time") or market.get("expiration_time", "")
             settlement_open = None
             if close_str:
@@ -544,20 +570,39 @@ class Trader:
                 except ValueError:
                     pass
 
+            candidates.append({
+                "market":          market,
+                "ticker":          ticker,
+                "decision":        decision,
+                "direction":       direction,
+                "is_ingame":       is_ingame,
+                "contract_price":  contract_price,
+                "size":            size,
+                "contracts":       contracts,
+                "settlement_open": settlement_open,
+                "confidence":      decision.get("confidence", 0.0),
+                "market_label":    decision.get("market_label", slot_key),
+            })
+
+        # --- Phase 2: sort by confidence descending, execute top candidate ---
+        candidates.sort(key=lambda c: c["confidence"], reverse=True)
+        traded = False
+
+        for c in candidates:
             # Slot already claimed via _within_trade_limit — don't release it
             self._place_and_monitor(
                 slot_key=slot_key,
                 slot_type=slot_type,
-                direction=direction,
-                signals=decision,
-                contracts=contracts,
-                contract_price=contract_price,
-                kalshi_ticker=ticker,
-                market_label=market_label,
-                trade_key=ticker,
-                settlement_open=settlement_open,
-                bet_size=size,
-                confidence_pct=decision.get("confidence_pct", 0.0),
+                direction=c["direction"],
+                signals=c["decision"],
+                contracts=c["contracts"],
+                contract_price=c["contract_price"],
+                kalshi_ticker=c["ticker"],
+                market_label=c["market_label"],
+                trade_key=c["ticker"],
+                settlement_open=c["settlement_open"],
+                bet_size=c["size"],
+                confidence_pct=c["decision"].get("confidence_pct", 0.0),
             )
             traded = True
             break  # one trade per slot per poll cycle

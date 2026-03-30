@@ -75,13 +75,14 @@ SLOTS = {
 NUM_SLOTS = len(SLOTS)  # 5 — one capital slot per market type
 
 # --- Non-crypto slot settings ---
-MARKET_EVAL_INTERVAL_SECS = 300   # Poll weather/sports slots every 5 minutes
+MARKET_EVAL_INTERVAL_SECS = 120   # Poll weather/sports slots every 2 minutes (faster in-game edge capture)
 # Weather close_time is ~30h away (next-day markets); sports close_time is weeks away (settlement).
 # Sports slots use game_date_filter (ticker date) instead — this value only matters for weather.
 SPORTS_EDGE_MIN            = 0.08  # Need ≥8% edge over Kalshi YES price to enter
 SPORTS_CONTRACT_PRICE_MIN  = 0.20  # Broader range for in-game (pre-game uses 0.35)
 SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game favorites can be 0.80+ and still have edge
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
+INGAME_STALE_MARKET_SECS   = 600   # Skip in-game market if Kalshi YES price unchanged >10 min
 WEATHER_EDGE_MIN           = 0.10  # Need ≥10% edge over Kalshi YES price to enter
 MARKET_MAX_CLOSE_HOURS     = 36.0  # Weather markets close ~30h away (next-day forecast)
 
@@ -123,13 +124,14 @@ MIN_BET = 3.00              # Kelly floor — market very confident (YES outside
 MAX_LOSING_STREAK = 999     # Data collection: disabled
 LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 
-# --- Bet Sizing (two tiers) ---
-# $10 when YES is within 10 cents of 0.50 (genuine uncertainty zone)
-# $5 when YES is 0.35–0.40 or 0.60–0.65 (market leaning but still tradeable)
-BET_NEAR_FAIR   = 10.00   # YES 0.40–0.60: best EV zone
-BET_SLIGHT_LEAN = 10.00   # (same as near-fair — merged into $10 tier)
-BET_MOD_LEAN    =  5.00   # YES 0.35–0.65: market leaning, smaller bet
-BET_STRONG_LEAN =  5.00   # (same as mod-lean — merged into $5 tier)
+# --- Bet Sizing — $10 flat (accuracy testing mode) ---
+# All four tiers set to $10 to measure model accuracy without sizing noise.
+# When accuracy data is sufficient, restore tiered sizing:
+#   BET_MOD_LEAN = 5.00, BET_STRONG_LEAN = 5.00
+BET_NEAR_FAIR   = 10.00   # YES 0.40–0.60: near-fair zone
+BET_SLIGHT_LEAN = 10.00   # YES 0.35–0.40 / 0.60–0.65: slight lean
+BET_MOD_LEAN    = 10.00   # YES 0.35–0.65: moderate lean
+BET_STRONG_LEAN = 10.00   # YES outside 0.35–0.65: strong lean
 
 # --- Kalshi Contract Price Filter (near-fair zone) ---
 # Only trade when YES is in this range — outside it the payout asymmetry makes

@@ -152,6 +152,7 @@ def _parse_event(event: dict) -> Optional[dict]:
     score_away = _parse_score(away)
     score_diff = score_home - score_away   # positive = home leading
     score_validated = False   # will be set True if NHL API confirms
+    score_mismatch  = False   # will be set True if sources disagree >1 goal (trade should skip)
 
     # Pre-game moneyline odds
     home_win_pct = 0.5
@@ -174,8 +175,9 @@ def _parse_event(event: dict) -> Optional[dict]:
     start_time = event.get("date", "")
     espn_sport_hint = event.get("_espn_sport", "")  # injected by get_games()
 
-    # NHL live score cross-validation — correct stale/wrong ESPN scores using
-    # the official NHL API before any model computation uses them.
+    # NHL live score cross-validation — compare ESPN score against official NHL API.
+    # Off-by-one (broadcast delay): trust NHL API and correct.
+    # Larger disagreement (>1 goal): flag as mismatch → strategy will skip the trade.
     if status == "in" and "nhl" in espn_sport_hint:
         try:
             from data.team_stats import get_nhl_live_scores
@@ -184,14 +186,28 @@ def _parse_event(event: dict) -> Optional[dict]:
             if nhl_key in nhl_scores:
                 nhl = nhl_scores[nhl_key]
                 if nhl["score_home"] != score_home or nhl["score_away"] != score_away:
-                    logger.warning(
-                        f"NHL score mismatch [{nhl_key}]: ESPN={score_home}-{score_away} "
-                        f"NHL_API={nhl['score_home']}-{nhl['score_away']} — using NHL API"
-                    )
-                    score_home = nhl["score_home"]
-                    score_away = nhl["score_away"]
-                    score_diff = score_home - score_away
-                score_validated = True
+                    total_diff = abs(nhl["score_home"] - score_home) + abs(nhl["score_away"] - score_away)
+                    if total_diff > 1:
+                        # Large disagreement — likely a goal review, OT event, or API lag.
+                        # Skip rather than guess which source is correct.
+                        logger.warning(
+                            f"NHL score mismatch [{nhl_key}]: ESPN={score_home}-{score_away} "
+                            f"NHL_API={nhl['score_home']}-{nhl['score_away']} "
+                            f"(diff={total_diff}) — marking mismatch, trade will be skipped"
+                        )
+                        score_mismatch = True
+                    else:
+                        # Off-by-one: minor broadcast lag → trust the official NHL API
+                        logger.warning(
+                            f"NHL score mismatch [{nhl_key}]: ESPN={score_home}-{score_away} "
+                            f"NHL_API={nhl['score_home']}-{nhl['score_away']} — correcting"
+                        )
+                        score_home = nhl["score_home"]
+                        score_away = nhl["score_away"]
+                        score_diff = score_home - score_away
+                        score_validated = True
+                else:
+                    score_validated = True
         except Exception as e:
             logger.debug(f"NHL score cross-validation error: {e}")
 
@@ -217,6 +233,7 @@ def _parse_event(event: dict) -> Optional[dict]:
         "score_away":        score_away,
         "score_diff":        score_diff,
         "score_validated":   score_validated,
+        "score_mismatch":    score_mismatch,
         "game_id":           event.get("id", ""),
         "start_time":        start_time,
     }

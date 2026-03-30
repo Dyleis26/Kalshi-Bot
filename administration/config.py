@@ -147,6 +147,11 @@ BET_PCT_OF_SLOT  = 0.25   # 25% of slot's capital allocation per trade
 CONTRACT_PRICE_MIN = 0.35
 CONTRACT_PRICE_MAX = 0.65
 
+# --- Equity Futures Trend (direct signal for BTC macro regime) ---
+EQUITY_TREND_ENABLED   = True   # Toggle equity futures signal on/off
+EQUITY_TREND_THRESHOLD = 0.0015 # ±0.15% over lookback window = directional signal
+EQUITY_LOOKBACK_BARS   = 3      # 3 × 5-min bars = 15-minute window (matches BTC window)
+
 # --- News Context ---
 NEWS_ENABLED         = True    # Toggle the news sentiment filter on/off
 NEWS_MAX_AGE_SECS    = 172800  # 48h — NewsAPI free tier ~24-26h delay; 48h window reliably captures yesterday's articles

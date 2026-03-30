@@ -4,11 +4,13 @@ from administration.config import (
     MIN_CONFIDENCE, KELLY_FRACTION, MIN_BET, FORCE_TRADE, NEWS_ENABLED,
     FUNDING_RATE_BULL_THRESHOLD, FUNDING_RATE_BEAR_THRESHOLD,
     FNG_BULL_MAX, FNG_BEAR_MIN,
+    EQUITY_TREND_ENABLED, EQUITY_TREND_THRESHOLD, EQUITY_LOOKBACK_BARS,
 )
 from administration.logger import log_signal
 from administration.news import NewsContext
 from data.funding import get_funding_rate, get_funding_bias
 from data.fng import get_fng
+from data.equity import get_equity_trend
 
 
 # Trade directions
@@ -66,13 +68,24 @@ class Strategy:
         else:
             fng_b = "neutral"
 
-        # Add 2 extra votes (6 total); majority still determines direction
-        biases += [funding_b, fng_b]
+        # Equity futures: direct (non-contrarian) macro regime signal
+        equity_data = None
+        equity_b    = "neutral"
+        if EQUITY_TREND_ENABLED:
+            equity_data = get_equity_trend(EQUITY_TREND_THRESHOLD, EQUITY_LOOKBACK_BARS)
+            if equity_data:
+                equity_b = equity_data["bias"]
+
+        # Add 3 extra votes (7 total); majority still determines direction
+        biases += [funding_b, fng_b, equity_b]
 
         bull_count = biases.count("bull")
         bear_count = biases.count("bear")
 
-        extra_tag = f" [fund={funding_b} fng={fng_b}({fng_data['value'] if fng_data else '?'})]"
+        eq_tag = ""
+        if equity_data:
+            eq_tag = f" eq={equity_b}({equity_data['change_pct']:+.2%}/{equity_data['lookback_min']}m)"
+        extra_tag = f" [fund={funding_b} fng={fng_b}({fng_data['value'] if fng_data else '?'}){eq_tag}]"
 
         if FORCE_TRADE:
             # Majority vote across 6 signals; tiebreaker on 3-3
@@ -130,10 +143,11 @@ class Strategy:
             decision=direction
         )
 
+        num_votes = len(biases)
         return {
             "direction":      direction,
             "confidence":     max(bull_count, bear_count),
-            "confidence_pct": round(max(bull_count, bear_count) / 6 * 100, 1),
+            "confidence_pct": round(max(bull_count, bear_count) / num_votes * 100, 1),
             "signals":        signals,
             "reason":         reason,
             "bull_votes":     bull_count,
@@ -142,6 +156,8 @@ class Strategy:
             "fng_value":      fng_data["value"] if fng_data else None,
             "news_bias":      news["bias"] if news else None,
             "news_score":     news["score"] if news else None,
+            "equity_bias":    equity_data["bias"]       if equity_data else None,
+            "equity_change":  equity_data["change_pct"] if equity_data else None,
         }
 
     # ------------------------------------------------------------------ #

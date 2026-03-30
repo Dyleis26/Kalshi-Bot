@@ -263,12 +263,14 @@ class Trader:
         confidence     = decision["confidence"]
         confidence_pct = decision["confidence_pct"]
         signals.update({
-            "bull_votes":   decision.get("bull_votes"),
-            "bear_votes":   decision.get("bear_votes"),
-            "funding_rate": decision.get("funding_rate"),
-            "fng_value":    decision.get("fng_value"),
-            "news_bias":    decision.get("news_bias"),
-            "news_score":   decision.get("news_score"),
+            "bull_votes":    decision.get("bull_votes"),
+            "bear_votes":    decision.get("bear_votes"),
+            "funding_rate":  decision.get("funding_rate"),
+            "fng_value":     decision.get("fng_value"),
+            "news_bias":     decision.get("news_bias"),
+            "news_score":    decision.get("news_score"),
+            "equity_bias":   decision.get("equity_bias"),
+            "equity_change": decision.get("equity_change"),
         })
 
         # One-trade-per-window: block duplicate entries in the same 15M window
@@ -356,10 +358,13 @@ class Trader:
                 f"(buying {'YES at discount' if direction == LONG else 'NO at discount'})"
             )
 
-        vwap_pos = "above" if signals["price"] > signals["vwap"] else "below"
+        vwap_pos   = "above" if signals["price"] > signals["vwap"] else "below"
+        equity_str = ""
+        if signals.get("equity_change") is not None:
+            equity_str = f" | equity={signals['equity_change']:+.2%}({signals['equity_bias']})"
         logger.info(
             f"BTC: signal-context | rsi={signals['rsi']:.1f}({signals['rsi_bias']}) | "
-            f"price {vwap_pos} vwap ({signals['price']:.2f} vs {signals['vwap']:.2f})"
+            f"price {vwap_pos} vwap ({signals['price']:.2f} vs {signals['vwap']:.2f}){equity_str}"
         )
 
         side           = "yes" if direction == LONG else "no"
@@ -459,10 +464,11 @@ class Trader:
         # One trade per weather slot per session
         if slot_type == "weather":
             with self._lock:
-                if self._traded_tickers[slot_key]:
-                    logger.info(f"{slot_key}: already traded this session — skipping slot")
-                    self._release_trade_slot(slot_key)
-                    return
+                already_traded = bool(self._traded_tickers[slot_key])
+            if already_traded:
+                logger.info(f"{slot_key}: already traded this session — skipping slot")
+                self._release_trade_slot(slot_key)
+                return
 
         # --- Phase 1: evaluate ALL markets, collect valid candidates ---
         candidates = []

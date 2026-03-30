@@ -629,7 +629,7 @@ class Trader:
             market_label=market_label,
         )
 
-        log_trade(direction, live_price, total_cost)
+        log_trade(direction, contract_price, total_cost)
         self.monitor.record_order_placed()
         self.discord.buy(
             direction=direction,
@@ -784,7 +784,7 @@ class Trader:
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
                 self._consec_losses[slot_key] = 0
-            log_trade(direction, live_price, actual_cost, result="win", pnl=pnl)
+            log_trade(direction, contract_price, actual_cost, result="win", pnl=pnl)
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
@@ -802,7 +802,7 @@ class Trader:
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
                 self._consec_losses[slot_key] = min(self._consec_losses[slot_key] + 1, 10)
-            log_trade(direction, live_price, actual_cost, result="loss", pnl=pnl)
+            log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl)
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(
@@ -904,7 +904,7 @@ class Trader:
                     self._tracked_windows.setdefault(
                         settlement_open, {"wins": 0, "losses": 0}
                     )["wins"] += 1
-            log_trade(direction, live_price, actual_cost, result="win", pnl=pnl)
+            log_trade(direction, contract_price, actual_cost, result="win", pnl=pnl)
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
@@ -941,7 +941,7 @@ class Trader:
                     _cutoff = settlement_open - timedelta(minutes=30)
                     for _k in [k for k in self._tracked_windows if k < _cutoff]:
                         del self._tracked_windows[_k]
-            log_trade(direction, live_price, actual_cost, result="loss", pnl=pnl)
+            log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl)
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(

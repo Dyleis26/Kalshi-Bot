@@ -1,16 +1,22 @@
 """
-weather.py — NWS weather forecast fetcher.
+weather.py — Weather forecast fetcher (NWS primary + Open-Meteo secondary).
 
-Pulls the National Weather Service (weather.gov) forecast for a configured city.
-No API key required. Returns a probability estimate and a human-readable description
-that strategy/weather.py uses to compare against a Kalshi market price.
+Primary source:   National Weather Service (weather.gov) — US only, no key.
+Secondary source: Open-Meteo (api.open-meteo.com) — global, free, ECMWF model.
+
+Both sources are fetched for cross-validation. When both are available,
+strategy/weather.py averages them to reduce single-model forecast error.
 
 NWS flow:
   1. GET https://api.weather.gov/points/{lat},{lng}  → resolves to grid endpoint
   2. GET {forecast_url}                               → daily forecast periods
 
-Cached for CACHE_TTL_SECS to avoid hammering NWS on every 5-min poll.
-Cache is per-process (module-level dict) — no disk I/O needed.
+Open-Meteo flow:
+  GET https://api.open-meteo.com/v1/forecast
+      ?latitude={lat}&longitude={lng}&daily=temperature_2m_max,precipitation_probability_max
+      &temperature_unit=fahrenheit&timezone=auto&forecast_days=1
+
+Cached 10 minutes per source to avoid hammering on every 5-min poll.
 """
 
 import logging
@@ -114,6 +120,73 @@ def get_forecast(lat: float, lng: float, city: str = "") -> Optional[dict]:
 
     except Exception as e:
         logger.warning(f"NWS forecast fetch error: {e}")
+        return None
+
+
+def get_open_meteo(lat: float, lng: float, city: str = "") -> Optional[dict]:
+    """
+    Fetch today's high temperature and precipitation probability from Open-Meteo (ECMWF model).
+
+    Returns a dict with the same shape as get_forecast() for easy comparison:
+        {
+          "city":         str,
+          "high_temp_f":  float | None,
+          "precip_pct":   float,        # 0.0–1.0
+          "short_desc":   str,
+          "period_name":  str,
+          "fetched_at":   str,
+        }
+    Returns None on error.
+    """
+    cache_key = f"om_{lat:.4f},{lng:.4f}"
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if cache_key in _cache:
+        entry = _cache[cache_key]
+        if now_ts - entry["_fetched_ts"] < CACHE_TTL_SECS:
+            return entry
+
+    try:
+        resp = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude":         lat,
+                "longitude":        lng,
+                "daily":            "temperature_2m_max,precipitation_probability_max",
+                "temperature_unit": "fahrenheit",
+                "timezone":         "auto",
+                "forecast_days":    1,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"Open-Meteo HTTP {resp.status_code}")
+            return None
+
+        data  = resp.json()
+        daily = data.get("daily", {})
+        temps = daily.get("temperature_2m_max", [None])
+        precips = daily.get("precipitation_probability_max", [None])
+
+        high_f   = float(temps[0])   if temps   and temps[0]   is not None else None
+        precip_p = float(precips[0]) / 100.0 if precips and precips[0] is not None else 0.0
+
+        result = {
+            "city":        city or f"{lat:.2f},{lng:.2f}",
+            "high_temp_f": round(high_f, 1) if high_f is not None else None,
+            "precip_pct":  round(precip_p, 4),
+            "short_desc":  "Open-Meteo ECMWF",
+            "period_name": "Today",
+            "fetched_at":  datetime.now(timezone.utc).isoformat(),
+            "_fetched_ts": now_ts,
+        }
+        _cache[cache_key] = result
+        logger.info(
+            f"Open-Meteo [{city}]: high={high_f}°F precip={precip_p*100:.0f}%"
+        )
+        return result
+
+    except Exception as e:
+        logger.warning(f"Open-Meteo fetch error: {e}")
         return None
 
 

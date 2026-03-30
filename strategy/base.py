@@ -1,8 +1,14 @@
 import pandas as pd
 from strategy.signals import evaluate
-from administration.config import MIN_CONFIDENCE, KELLY_FRACTION, MIN_BET, FORCE_TRADE, NEWS_ENABLED
+from administration.config import (
+    MIN_CONFIDENCE, KELLY_FRACTION, MIN_BET, FORCE_TRADE, NEWS_ENABLED,
+    FUNDING_RATE_BULL_THRESHOLD, FUNDING_RATE_BEAR_THRESHOLD,
+    FNG_BULL_MAX, FNG_BEAR_MIN,
+)
 from administration.logger import log_signal
 from administration.news import NewsContext
+from data.funding import get_funding_rate, get_funding_bias
+from data.fng import get_fng
 
 
 # Trade directions
@@ -32,47 +38,72 @@ class Strategy:
             }
         """
         signals = evaluate(df_1h, df_15m)
+
+        # Core technical signals (4 votes)
         biases = [
             signals["rsi_bias"],
             signals["macd_bias"],
             signals["momentum_bias"],
-            signals["vwap_bias"],   # All 4 signals get equal weight
+            signals["vwap_bias"],
         ]
+
+        # Funding rate: contrarian signal — crowded positioning reverses
+        funding_data = get_funding_rate("BTCUSDT")
+        funding_b = (
+            get_funding_bias(
+                funding_data["funding_rate"],
+                FUNDING_RATE_BULL_THRESHOLD,
+                FUNDING_RATE_BEAR_THRESHOLD,
+            )
+            if funding_data else "neutral"
+        )
+
+        # Fear & Greed: contrarian signal — extreme readings only
+        fng_data = get_fng()
+        if fng_data:
+            fv = fng_data["value"]
+            fng_b = "bull" if fv <= FNG_BULL_MAX else ("bear" if fv >= FNG_BEAR_MIN else "neutral")
+        else:
+            fng_b = "neutral"
+
+        # Add 2 extra votes (6 total); majority still determines direction
+        biases += [funding_b, fng_b]
 
         bull_count = biases.count("bull")
         bear_count = biases.count("bear")
 
+        extra_tag = f" [fund={funding_b} fng={fng_b}({fng_data['value'] if fng_data else '?'})]"
+
         if FORCE_TRADE:
-            # Majority vote: need strict majority (3-1 or 4-0), or a clear tiebreaker on 2-2
+            # Majority vote across 6 signals; tiebreaker on 3-3
             if bull_count > bear_count:
                 direction = LONG
-                reason = f"Force/majority — bull={bull_count} bear={bear_count}"
+                reason = f"Force/majority — bull={bull_count} bear={bear_count}{extra_tag}"
             elif bear_count > bull_count:
                 direction = SHORT
-                reason = f"Force/majority — bull={bull_count} bear={bear_count}"
+                reason = f"Force/majority — bull={bull_count} bear={bear_count}{extra_tag}"
             else:
-                # 2-2 tie: use momentum as tiebreaker (most reactive signal).
+                # 3-3 tie: use momentum as tiebreaker (most reactive signal)
                 if signals["momentum_bias"] == "bull":
                     direction = LONG
-                    reason = f"Force/tie — momentum tiebreaker bull"
+                    reason = f"Force/tie — momentum tiebreaker bull{extra_tag}"
                 elif signals["momentum_bias"] == "bear":
                     direction = SHORT
-                    reason = f"Force/tie — momentum tiebreaker bear"
+                    reason = f"Force/tie — momentum tiebreaker bear{extra_tag}"
                 else:
-                    # Final fallback: VWAP side (price above = LONG, below = SHORT).
-                    # Ensures we always produce a direction — never skip a window.
+                    # Final fallback: VWAP side
                     vwap_side = signals["vwap_bias"]
                     direction = LONG if vwap_side == "bull" else SHORT
-                    reason = f"Force/tie — VWAP fallback ({vwap_side})"
+                    reason = f"Force/tie — VWAP fallback ({vwap_side}){extra_tag}"
         elif bull_count >= MIN_CONFIDENCE:
             direction = LONG
-            reason = "All 4 signals bullish"
+            reason = f"Confluence — {bull_count}/6 bullish{extra_tag}"
         elif bear_count >= MIN_CONFIDENCE:
             direction = SHORT
-            reason = "All 4 signals bearish"
+            reason = f"Confluence — {bear_count}/6 bearish{extra_tag}"
         else:
             direction = NONE
-            reason = f"No confluence — bull={bull_count} bear={bear_count} neutral={biases.count('neutral')}"
+            reason = f"No confluence — bull={bull_count} bear={bear_count}{extra_tag}"
 
         # News filter: block trades where high-confidence news directly
         # contradicts the technical direction. Medium/neutral news is logged only.

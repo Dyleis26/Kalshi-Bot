@@ -108,35 +108,66 @@ class KalshiClient:
         """Convenience wrapper — returns BTC 15M market."""
         return self.get_market_for_asset("BTC")
 
-    def get_markets_by_series(self, series_prefix: str, max_close_hours: float = 2.0) -> list:
+    def get_markets_by_series(self, series_prefix: str, max_close_hours: float = 36.0,
+                               game_date_filter: bool = False) -> list:
         """
-        Return all open markets whose series_ticker starts with series_prefix
-        AND whose close_time is within max_close_hours from now.
+        Return open markets for a given series_ticker that are relevant to trade now.
 
-        Used by the sports/weather slots to discover tradeable markets.
+        game_date_filter=True  (sports): parse game date from ticker (e.g. KXNBAGAME-26MAR29...)
+                                          and only return today's games with active pricing.
+        game_date_filter=False (weather): filter by close_time within max_close_hours.
+
         Returns a list of market dicts (may be empty).
         """
-        from datetime import datetime, timezone, timedelta
+        import re
+        from datetime import datetime, timezone, timedelta, date as dt_date
+
+        from zoneinfo import ZoneInfo
         now = datetime.now(timezone.utc)
+        # Use Eastern Time for game date — Kalshi tickers use ET dates (e.g. 26MAR30 = March 30 ET)
+        today = datetime.now(ZoneInfo("America/New_York")).date()
         cutoff = now + timedelta(hours=max_close_hours)
 
+        _MONTH = {'JAN':1,'FEB':2,'MAR':3,'APR':4,'MAY':5,'JUN':6,
+                  'JUL':7,'AUG':8,'SEP':9,'OCT':10,'NOV':11,'DEC':12}
+
         try:
-            data = self._get_public(
+            data = self._get(
                 "/markets",
                 params={"status": "open", "series_ticker": series_prefix, "limit": 100},
             )
             markets = data.get("markets", [])
             result = []
             for m in markets:
-                close_str = m.get("close_time") or m.get("expiration_time", "")
-                if not close_str:
-                    continue
-                try:
-                    close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
-                except ValueError:
-                    continue
-                if now <= close_dt <= cutoff:
-                    result.append(m)
+                if game_date_filter:
+                    # Sports: skip unpriced markets (game not yet posted or already finished)
+                    yes_ask = float(m.get("yes_ask_dollars") or 0)
+                    if yes_ask <= 0:
+                        continue
+                    # Parse game date from ticker: KXNBAGAME-26MAR29GSWDEN-DEN → 26MAR29
+                    ticker = m.get("ticker", "")
+                    dm = re.search(r'(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})',
+                                   ticker)
+                    if not dm:
+                        continue
+                    game_date = dt_date(2000 + int(dm.group(1)),
+                                        _MONTH[dm.group(2)],
+                                        int(dm.group(3)))
+                    if game_date != today:
+                        continue
+                else:
+                    # Weather: filter by close_time within max_close_hours
+                    close_str = m.get("close_time") or m.get("expiration_time", "")
+                    if not close_str:
+                        continue
+                    try:
+                        close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
+                    except ValueError:
+                        continue
+                    if not (now <= close_dt <= cutoff):
+                        continue
+
+                result.append(m)
             return result
         except Exception as e:
             log_error(f"Failed to fetch markets for series {series_prefix!r}", e)

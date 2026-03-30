@@ -9,6 +9,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 KALSHI_API_KEY       = os.getenv("KALSHI_API_KEY")
 CRYPTOPANIC_API_KEY  = os.getenv("CRYPTOPANIC_API_KEY", "")
 NEWSAPI_KEY          = os.getenv("NEWSAPI_KEY", "")
+ODDS_API_KEY         = os.getenv("ODDS_API_KEY", "")   # The Odds API — free tier 500 req/month
 KALSHI_KEY_PATH = os.getenv(
     "KALSHI_KEY_PATH",
     str(Path(__file__).parent / "kalshi_key.pem")
@@ -44,37 +45,45 @@ SLOTS = {
     "WEATHER": {
         "type":       "weather",
         "label":      "Weather",
-        "series":     "HIGH",         # Kalshi high-temperature series prefix
+        "series":     "KXHIGHNY",     # Kalshi NYC daily high-temperature series
         "city":       "New York City",
         "lat":        40.7128,
         "lng":        -74.0060,
     },
     "MLB": {
-        "type":       "sports",
-        "label":      "MLB",
-        "series":     "MLB",          # Kalshi MLB game-winner series prefix
-        "espn_sport": "baseball/mlb",
+        "type":             "sports",
+        "label":            "MLB",
+        "series":           "KXMLBGAME",  # Kalshi MLB game-winner series
+        "espn_sport":       "baseball/mlb",
+        "game_date_filter": True,          # filter by game date in ticker, not close_time
     },
     "NBA": {
-        "type":       "sports",
-        "label":      "NBA",
-        "series":     "NBA",          # Kalshi NBA game-winner series prefix
-        "espn_sport": "basketball/nba",
+        "type":             "sports",
+        "label":            "NBA",
+        "series":           "KXNBAGAME",  # Kalshi NBA game-winner series
+        "espn_sport":       "basketball/nba",
+        "game_date_filter": True,
     },
     "NHL": {
-        "type":       "sports",
-        "label":      "NHL",
-        "series":     "NHL",          # Kalshi NHL game-winner series prefix
-        "espn_sport": "hockey/nhl",
+        "type":             "sports",
+        "label":            "NHL",
+        "series":           "KXNHLGAME",  # Kalshi NHL game-winner series
+        "espn_sport":       "hockey/nhl",
+        "game_date_filter": True,
     },
 }
 NUM_SLOTS = len(SLOTS)  # 5 — one capital slot per market type
 
 # --- Non-crypto slot settings ---
 MARKET_EVAL_INTERVAL_SECS = 300   # Poll weather/sports slots every 5 minutes
+# Weather close_time is ~30h away (next-day markets); sports close_time is weeks away (settlement).
+# Sports slots use game_date_filter (ticker date) instead — this value only matters for weather.
 SPORTS_EDGE_MIN            = 0.08  # Need ≥8% edge over Kalshi YES price to enter
+SPORTS_CONTRACT_PRICE_MIN  = 0.20  # Broader range for in-game (pre-game uses 0.35)
+SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game favorites can be 0.80+ and still have edge
+SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
 WEATHER_EDGE_MIN           = 0.10  # Need ≥10% edge over Kalshi YES price to enter
-MARKET_MAX_CLOSE_HOURS     = 2.0   # Only trade markets closing within 2 hours
+MARKET_MAX_CLOSE_HOURS     = 36.0  # Weather markets close ~30h away (next-day forecast)
 
 # --- Market ---
 INTERVALS = {
@@ -138,19 +147,27 @@ NEWS_MED_CONFIDENCE  = 3       # Score threshold for "medium" confidence bias
 # --- Intra-Window Position Management ---
 # Stop-loss: sell the contract immediately if it drops to this value.
 # At 0.25, a NO bought at 0.50 has lost half its value — cut and save the rest.
-STOP_LOSS_PRICE  = 0.33   # Tightened from 0.25 — cuts failed contrarian bets earlier
+STOP_LOSS_PRICE  = 0.00   # DISABLED — let trades run to settlement for signal accuracy testing
 
-# Trailing profit: once the contract reaches this value, arm a trailing exit.
-# Exits when the price drops TRAILING_BUFFER cents below the observed peak.
-# Buffer prevents premature exits on single-poll noise (e.g. armed at 0.75, dips
-# to 0.74 then recovers — without buffer we'd exit; with buffer we stay in).
-TRAILING_TRIGGER = 0.75
-TRAILING_BUFFER  = 0.05   # Require 5-cent drop from peak before exiting
+# Trailing profit: DISABLED — let trades run to settlement for signal accuracy testing
+TRAILING_TRIGGER = 1.01   # Never triggers (contract price never exceeds 1.0)
+TRAILING_BUFFER  = 0.05
 
 # --- Correlated-sweep protection ---
 SWEEP_COOLOFF_LOSSES  = 3     # Losses in one window that trigger a 1-window cooloff
 CONSEC_LOSS_THRESHOLD = 2     # Consecutive losses on one asset before bet reduction kicks in
 CONSEC_LOSS_REDUCTION = 0.50  # Bet multiplier when asset is on a losing streak
+
+# --- Funding Rate (Binance perpetual — contrarian signal for crypto) ---
+# Positive rate = market net long (longs pay shorts) → contrarian SHORT
+# Negative rate = market net short (shorts pay longs) → contrarian LONG
+FUNDING_RATE_BULL_THRESHOLD = -0.0001   # rate <= this → bull signal (crowded short)
+FUNDING_RATE_BEAR_THRESHOLD =  0.0003   # rate >= this → bear signal (crowded long)
+
+# --- Fear & Greed Index (Alternative.me — contrarian signal for crypto) ---
+# Only extreme readings count as signals (single vote in the bias pool)
+FNG_BULL_MAX =  25   # value <= this (Extreme Fear) → contrarian bull
+FNG_BEAR_MIN =  75   # value >= this (Extreme Greed) → contrarian bear
 
 # --- Kalshi Fees ---
 KALSHI_MAKER_FEE = 0.0175   # Maker fee coefficient (limit orders)

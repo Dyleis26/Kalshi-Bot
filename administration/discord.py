@@ -80,7 +80,7 @@ class Discord:
             cost: float, payout: float, portfolio_total: float,
             market_label: str = "BTC UP", bet_size: float = 0.0,
             session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
-        pnl_sign = "+" if session_pnl > 0 else ""
+        pnl_sign = "+" if session_pnl >= 0 else "-"
         fill_str = (f"{contracts_filled}/{contracts}"
                     if contracts_filled != contracts
                     else f"{contracts_filled}")
@@ -103,7 +103,7 @@ class Discord:
                  price_pct: float, pnl: float, portfolio_total: float,
                  market_label: str = "BTC UP",
                  session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
-        pnl_sign = "+" if session_pnl > 0 else ""
+        pnl_sign = "+" if session_pnl >= 0 else "-"
         fill_str = (f"{contracts_filled}/{contracts}"
                     if contracts_filled != contracts
                     else f"{contracts_filled}")
@@ -125,7 +125,7 @@ class Discord:
                   price_pct: float, pnl: float, portfolio_total: float,
                   market_label: str = "BTC UP",
                   session_wins: int = 0, session_losses: int = 0, session_pnl: float = 0.0):
-        pnl_sign = "+" if session_pnl > 0 else ""
+        pnl_sign = "+" if session_pnl >= 0 else "-"
         fill_str = (f"{contracts_filled}/{contracts}"
                     if contracts_filled != contracts
                     else f"{contracts_filled}")

@@ -13,7 +13,7 @@ from administration.config import (
     BET_NEAR_FAIR, BET_SLIGHT_LEAN, BET_MOD_LEAN, BET_STRONG_LEAN,
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
-    MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS,
+    MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS, SPORTS_INGAME_COOLOFF_MINS,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -79,6 +79,8 @@ class Trader:
 
         # One-trade-per-window/market: stores the last traded ticker per slot
         self._last_trade_key: dict = {k: None for k in SLOTS}
+        # In-game re-entry cooloff: {ticker: last_entry_monotonic_time}
+        self._ingame_trade_times: dict = {}
 
         # Correlated-sweep protection
         self._consec_losses:        dict = {k: 0 for k in SLOTS}
@@ -422,11 +424,17 @@ class Trader:
             self._release_trade_slot(slot_key)
             return
 
-        series   = slot_cfg["series"]
-        markets  = self.kalshi.get_markets_by_series(series, max_close_hours=MARKET_MAX_CLOSE_HOURS)
+        series           = slot_cfg["series"]
+        game_date_filter = slot_cfg.get("game_date_filter", False)
+        markets          = self.kalshi.get_markets_by_series(
+            series,
+            max_close_hours=MARKET_MAX_CLOSE_HOURS,
+            game_date_filter=game_date_filter,
+        )
 
         if not markets:
-            logger.info(f"{slot_key}: no open markets found for series={series!r} within {MARKET_MAX_CLOSE_HOURS}h")
+            filter_desc = "today's games" if game_date_filter else f"within {MARKET_MAX_CLOSE_HOURS}h"
+            logger.info(f"{slot_key}: no open markets found for series={series!r} ({filter_desc})")
             self._release_trade_slot(slot_key)
             return
 
@@ -438,11 +446,12 @@ class Trader:
             if not ticker:
                 continue
 
-            # One-trade-per-market: don't re-enter the same game/event twice
-            with self._lock:
-                if self._last_trade_key[slot_key] == ticker:
-                    logger.info(f"{slot_key}: already traded market {ticker} — skipping")
-                    continue
+            # Pre-entry re-entry guard for weather (one trade per market)
+            if slot_type != "sports":
+                with self._lock:
+                    if self._last_trade_key[slot_key] == ticker:
+                        logger.info(f"{slot_key}: already traded market {ticker} — skipping")
+                        continue
 
             # Get signal from external source
             if slot_type == "weather":
@@ -463,10 +472,26 @@ class Trader:
 
             direction    = decision["direction"]
             market_label = decision.get("market_label", slot_key)
+            is_ingame    = decision.get("is_ingame", False)
 
             if direction == NONE:
                 logger.info(f"{slot_key} [{ticker}]: no trade — {decision['reason']}")
                 continue
+
+            # Post-decision re-entry guard for sports
+            if slot_type == "sports":
+                # Use game-level key (strip team suffix) so both team markets in the
+                # same game share the same cooloff (e.g. BOSATL-BOS and BOSATL-ATL
+                # both map to BOSATL, preventing duplicate trades on the same game).
+                game_key = ticker.rsplit('-', 1)[0] if ticker.count('-') >= 2 else ticker
+                cooloff_secs = SPORTS_INGAME_COOLOFF_MINS * 60 if is_ingame else 86400
+                with self._lock:
+                    last_t = self._ingame_trade_times.get(game_key, 0)
+                    since  = time.monotonic() - last_t
+                    if since < cooloff_secs:
+                        tag = f"{int(since//60)}m/{SPORTS_INGAME_COOLOFF_MINS}m" if is_ingame else "pre-game once-only"
+                        logger.info(f"{slot_key}: re-entry blocked on {ticker} ({tag} cooloff)")
+                        continue
 
             yes_ask = float(market.get("yes_ask_dollars", 0.5))
             no_ask  = float(market.get("no_ask_dollars",  0.5))
@@ -584,6 +609,10 @@ class Trader:
             self._open_stake = round(self._open_stake + total_cost, 2)
             portfolio_after  = round(self.portfolio.total - self._open_stake, 2)
             self._last_trade_key[slot_key] = trade_key
+            # Record ingame trade time for cooloff tracking (game-level key)
+            if slot_type == "sports":
+                _gk = trade_key.rsplit('-', 1)[0] if trade_key.count('-') >= 2 else trade_key
+                self._ingame_trade_times[_gk] = time.monotonic()
 
         slot_cfg = SLOTS[slot_key]
         trade_id = self.trade_log.open_trade(
@@ -660,6 +689,11 @@ class Trader:
         poll_interval  = 10
         deadline       = time.monotonic() + seconds_until_settlement
 
+        # Stop-loss threshold: 50% drop from entry (relative), capped at STOP_LOSS_PRICE.
+        # Prevents immediate stop-out when entry price is already below STOP_LOSS_PRICE
+        # (e.g. sports NO contracts priced at 0.20-0.30 when YES market is heavily favored).
+        stop_threshold = min(STOP_LOSS_PRICE, contract_price * 0.50)
+
         while self.running:
             remaining = deadline - time.monotonic()
             if remaining <= poll_interval:
@@ -696,10 +730,10 @@ class Trader:
                                  market_label=market_label)
                 return
 
-            if current_price <= STOP_LOSS_PRICE:
+            if current_price <= stop_threshold:
                 logger.info(
                     f"{slot_key}: stop-loss EXIT — {side.upper()} at {current_price:.2f} "
-                    f"(<= {STOP_LOSS_PRICE})"
+                    f"(<= {stop_threshold:.2f})"
                 )
                 self._exit_early(slot_key, slot_type, direction, contracts, contract_price,
                                  current_price, trade_id, "stop-loss", fresh_ticker,

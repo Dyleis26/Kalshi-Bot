@@ -1,28 +1,27 @@
 """
 sports.py — Kalshi sports market signal strategy.
 
-Compares ESPN win-probability estimates to the current Kalshi YES price.
-If there's meaningful edge (ESPN probability diverges from Kalshi price by
-at least SPORTS_EDGE_MIN), returns a direction to trade.
+Pre-game: compares ESPN pre-game moneyline to Kalshi YES price.
+In-game:  uses a Gaussian random-walk scoring model (score_diff + time remaining)
+          to compute live win probability, then compares to Kalshi price.
 
-Decision logic:
-  - BUY YES  (LONG):  ESPN win probability >> Kalshi YES price
-  - BUY NO  (SHORT):  ESPN win probability << Kalshi YES price
-  - NO TRADE:         Edge too small, no ESPN game found, or near-fair filter fails
+In-game edge sources:
+  - Market lag: Kalshi prices often update slowly vs live game state
+  - Comeback value: trailing teams are sometimes oversold on Kalshi
+  - Normalization: late-close games should trade near 0.50; if they don't, edge exists
 
-Kalshi sports markets ask:
-  "Will the LA Dodgers win against the Chicago Cubs?"
-  "Will the Boston Celtics beat the New York Knicks?"
-  "Will the Boston Bruins win?"
-
-We match the Kalshi market title to ESPN game data using team name matching,
-then extract the win probability for the favoured team.
+Price range is wider for in-game (SPORTS_CONTRACT_PRICE_MIN/MAX) because a
+team winning 79-62 in the 3rd quarter legitimately has YES > 0.80.
 """
 
 import logging
-from data.sports import get_games, find_matching_game
+from data.sports import get_games, find_matching_game, compute_win_probability, get_nba_momentum
+from data.odds import get_odds, find_matching_odds
+from data.mlb_stats import get_mlb_win_probability
 from administration.config import (
-    CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, SPORTS_EDGE_MIN,
+    CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX,
+    SPORTS_EDGE_MIN, SPORTS_CONTRACT_PRICE_MIN, SPORTS_CONTRACT_PRICE_MAX,
+    ODDS_API_KEY,
 )
 
 logger = logging.getLogger("strategy.sports")
@@ -54,12 +53,9 @@ class SportsStrategy:
                 "market_label":   str (formatted for Discord, e.g. "MLB: Cubs to WIN"),
             }
         """
-        title = market.get("title", market.get("subtitle", ""))
+        title   = market.get("title", market.get("subtitle", ""))
+        yes_sub = market.get("yes_sub_title", "")   # e.g. "Denver" or "Golden State"
         yes_ask = float(market.get("yes_ask_dollars", 0.5))
-
-        # Near-fair filter — same as crypto
-        if not (CONTRACT_PRICE_MIN <= yes_ask <= CONTRACT_PRICE_MAX):
-            return _no_trade(f"market too confident (YES={yes_ask:.2f})", yes_ask, sport_label, title)
 
         # Fetch today's ESPN games for this sport
         games = get_games(espn_sport)
@@ -71,35 +67,112 @@ class SportsStrategy:
         if not game:
             return _no_trade(f"no ESPN game matched to '{title[:60]}'", yes_ask, sport_label, title)
 
-        # Determine which team the Kalshi market is asking about (the YES outcome).
-        # Kalshi titles usually start with "Will [team] win..." — we find which team
-        # appears first in the title and treat that as the YES team.
-        yes_team_win_pct = _resolve_yes_team_probability(game, title)
+        is_live = (game.get("status") == "in")
+
+        # Price range filter: wider for in-game (live markets can be 0.20–0.80+)
+        price_min = SPORTS_CONTRACT_PRICE_MIN if is_live else CONTRACT_PRICE_MIN
+        price_max = SPORTS_CONTRACT_PRICE_MAX if is_live else CONTRACT_PRICE_MAX
+        if not (price_min <= yes_ask <= price_max):
+            status_tag = "in-game" if is_live else "pre-game"
+            return _no_trade(f"market too confident ({status_tag} YES={yes_ask:.2f})", yes_ask, sport_label, title)
+
+        # Win probability source (in priority order):
+        #   In-game MLB   → MLB Stats API base-out state model (most accurate)
+        #   In-game NBA   → Gaussian model + play-by-play momentum adjustment
+        #   In-game NHL   → Gaussian scoring model
+        #   Pre-game      → The Odds API (sharp sportsbook lines) → ESPN fallback
+        if is_live:
+            if espn_sport == "baseball/mlb":
+                mlb_result = get_mlb_win_probability(game["home_abbr"], game["away_abbr"])
+                if mlb_result:
+                    home_p, away_p = mlb_result
+                    prob_source = (
+                        f"MLBStats(score={game['score_home']}-{game['score_away']} "
+                        f"{game.get('display_clock','')})"
+                    )
+                else:
+                    home_p, away_p = compute_win_probability(game, espn_sport)
+                    prob_source = (
+                        f"model(score={game['score_home']}-{game['score_away']} "
+                        f"diff={game['score_diff']:+d} {game.get('display_clock','')})"
+                    )
+            else:
+                home_p, away_p = compute_win_probability(game, espn_sport)
+                prob_source = (
+                    f"model(score={game['score_home']}-{game['score_away']} "
+                    f"diff={game['score_diff']:+d} {game.get('display_clock','')})"
+                )
+        else:
+            # Pre-game: try The Odds API first (sharp sportsbook lines), fall back to ESPN
+            home_p = away_p = None
+            odds_source = None
+            if ODDS_API_KEY:
+                odds_games = get_odds(espn_sport, ODDS_API_KEY)
+                if odds_games:
+                    odds_match = find_matching_odds(
+                        odds_games, game["home_abbr"], game["away_abbr"],
+                        game["home_team"], game["away_team"]
+                    )
+                    if odds_match:
+                        home_p = odds_match["home_win_pct"]
+                        away_p = odds_match["away_win_pct"]
+                        odds_source = odds_match["bookmaker"]
+
+            if home_p is None:
+                # Fall back to ESPN pre-game moneyline
+                if not game.get("has_odds", False):
+                    return _no_trade("no pre-game odds (Odds API + ESPN unavailable)", yes_ask, sport_label, title)
+                home_p = game["home_win_pct"]
+                away_p = game["away_win_pct"]
+                prob_source = "ESPN pre-game"
+            else:
+                prob_source = f"OddsAPI/{odds_source}"
+
+        # Determine which team is the YES outcome
+        yes_team_win_pct = _resolve_yes_team_probability(
+            game, title, yes_sub, home_p=home_p, away_p=away_p
+        )
         if yes_team_win_pct is None:
             return _no_trade(f"could not resolve YES team from '{title[:60]}'", yes_ask, sport_label, title)
 
-        edge = yes_team_win_pct - yes_ask
-        market_label = _build_label(sport_label, title, game)
+        # NBA in-game: apply play-by-play momentum adjustment (±0.03)
+        momentum_tag = ""
+        if is_live and espn_sport == "basketball/nba":
+            mom = get_nba_momentum(game.get("game_id", ""))
+            if mom:
+                # Determine if the YES team is home or away
+                # Use the same resolution logic: yes_team_win_pct == home_p → YES is home
+                yes_is_home = abs(yes_team_win_pct - home_p) < 0.005
+                adj = mom["home_adj"] if yes_is_home else mom["away_adj"]
+                if adj != 0.0:
+                    yes_team_win_pct = max(0.01, min(0.99, yes_team_win_pct + adj))
+                    tag_dir = "+" if adj > 0 else ""
+                    momentum_tag = (
+                        f" mom({tag_dir}{adj:+.2f} "
+                        f"h={mom['home_pts_recent']} a={mom['away_pts_recent']})"
+                    )
 
+        edge = yes_team_win_pct - yes_ask
+        market_label = _build_label(sport_label, title, game, yes_sub)
+
+        src = prob_source + momentum_tag
         if edge >= SPORTS_EDGE_MIN:
             direction = LONG
             reason = (
-                f"ESPN edge={edge:+.2f} "
-                f"({game['home_abbr']} vs {game['away_abbr']}, "
-                f"ESPN={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f}) — buying YES"
+                f"edge={edge:+.2f} ({src}, "
+                f"p={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f}) — buying YES"
             )
         elif edge <= -SPORTS_EDGE_MIN:
             direction = SHORT
             reason = (
-                f"ESPN edge={edge:+.2f} "
-                f"({game['home_abbr']} vs {game['away_abbr']}, "
-                f"ESPN={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f}) — buying NO"
+                f"edge={edge:+.2f} ({src}, "
+                f"p={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f}) — buying NO"
             )
         else:
             direction = NONE
             reason = (
                 f"edge too small: {edge:+.2f} < ±{SPORTS_EDGE_MIN} "
-                f"(ESPN={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f})"
+                f"({src} p={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f})"
             )
 
         logger.info(f"Sports [{sport_label}]: {reason}")
@@ -112,6 +185,7 @@ class SportsStrategy:
             "edge":          round(edge, 4),
             "reason":        reason,
             "market_label":  market_label,
+            "is_ingame":     is_live,
             # Crypto-compatible empty fields for trade log
             "rsi": 0, "macd": 0, "momentum": 0, "vwap": 0, "price": 0,
             "rsi_bias": None, "macd_bias": None, "momentum_bias": None, "vwap_bias": None,
@@ -122,38 +196,43 @@ class SportsStrategy:
 #  Helpers                                                                 #
 # ---------------------------------------------------------------------- #
 
-def _resolve_yes_team_probability(game: dict, title: str) -> float | None:
+def _resolve_yes_team_probability(game: dict, title: str, yes_sub: str = "",
+                                   home_p: float = None, away_p: float = None) -> float | None:
     """
-    Determine which team is the YES outcome in the Kalshi market title,
-    then return ESPN's win probability for that team.
+    Determine which team is the YES outcome, then return the win probability for that team.
 
-    Kalshi titles: "Will the LA Dodgers beat the Cubs?" → YES = Dodgers win
-    If we can't determine YES team, return 0.5 (neutral) so the near-fair
-    filter naturally blocks the trade.
+    home_p / away_p: pre-computed probabilities (in-game model or ESPN pre-game).
+    Falls back to game["home_win_pct"] / game["away_win_pct"] if not supplied.
     """
-    title_lower = title.lower()
+    hp = home_p if home_p is not None else game["home_win_pct"]
+    ap = away_p if away_p is not None else game["away_win_pct"]
 
-    home_abbr = game["home_abbr"].lower()
-    away_abbr = game["away_abbr"].lower()
+    home_abbr  = game["home_abbr"].lower()
+    away_abbr  = game["away_abbr"].lower()
     home_words = [w.lower() for w in game["home_team"].split() if len(w) > 2]
     away_words = [w.lower() for w in game["away_team"].split() if len(w) > 2]
 
-    # Score each team by how prominent they are in the title (first mention wins)
+    if yes_sub:
+        sub_lower = yes_sub.lower()
+        home_match = (home_abbr in sub_lower or any(w in sub_lower for w in home_words))
+        away_match = (away_abbr in sub_lower or any(w in sub_lower for w in away_words))
+        if home_match and not away_match:
+            return hp
+        if away_match and not home_match:
+            return ap
+
+    # Fallback: first team mentioned in title is YES
+    title_lower = title.lower()
     home_pos = _first_mention(title_lower, [home_abbr] + home_words)
     away_pos = _first_mention(title_lower, [away_abbr] + away_words)
 
     if home_pos is None and away_pos is None:
         return None
-
-    # The team mentioned first is typically the YES team ("Will [team] win...")
     if home_pos is None:
-        yes_is_home = False
-    elif away_pos is None:
-        yes_is_home = True
-    else:
-        yes_is_home = (home_pos <= away_pos)
-
-    return game["home_win_pct"] if yes_is_home else game["away_win_pct"]
+        return ap
+    if away_pos is None:
+        return hp
+    return hp if home_pos <= away_pos else ap
 
 
 def _first_mention(text: str, tokens: list) -> int | None:
@@ -166,24 +245,34 @@ def _first_mention(text: str, tokens: list) -> int | None:
     return min(positions) if positions else None
 
 
-def _build_label(sport_label: str, title: str, game: dict) -> str:
-    """
-    Build a short Discord-friendly label like "MLB: Cubs to WIN"
-    from the market title and matched ESPN game.
-    """
-    import re
-    # Try to extract team name from title: "Will [team] win/beat..."
-    match = re.search(
-        r"will (?:the )?(.+?)\s+(?:win|beat|defeat|cover)",
-        title, re.IGNORECASE
-    )
-    if match:
-        team = match.group(1).strip()
-        if len(team) <= 30:
-            return f"{sport_label}: {team} to WIN"
+def _build_label(sport_label: str, title: str, game: dict, yes_sub: str = "") -> str:
+    """Build a short Discord-friendly label, e.g. 'NBA - GSW WIN'."""
+    # Match yes_sub to home or away team to find the abbreviation
+    if yes_sub:
+        sub_lower = yes_sub.lower()
+        home_words = [w.lower() for w in game["home_team"].split() if len(w) > 2]
+        away_words = [w.lower() for w in game["away_team"].split() if len(w) > 2]
+        home_match = (game["home_abbr"].lower() in sub_lower or
+                      any(w in sub_lower for w in home_words))
+        away_match = (game["away_abbr"].lower() in sub_lower or
+                      any(w in sub_lower for w in away_words))
+        if home_match and not away_match:
+            return f"{sport_label} - {game['home_abbr']} WIN"
+        if away_match and not home_match:
+            return f"{sport_label} - {game['away_abbr']} WIN"
 
-    # Fallback: use abbreviations
-    return f"{sport_label}: {game['home_abbr']} vs {game['away_abbr']}"
+    # Fallback: first team abbreviation from title position
+    title_lower = title.lower()
+    home_pos = _first_mention(title_lower, [game["home_abbr"].lower()] +
+                              [w.lower() for w in game["home_team"].split() if len(w) > 2])
+    away_pos = _first_mention(title_lower, [game["away_abbr"].lower()] +
+                              [w.lower() for w in game["away_team"].split() if len(w) > 2])
+    if home_pos is not None and (away_pos is None or home_pos <= away_pos):
+        return f"{sport_label} - {game['home_abbr']} WIN"
+    if away_pos is not None:
+        return f"{sport_label} - {game['away_abbr']} WIN"
+
+    return f"{sport_label} - {game['home_abbr']} vs {game['away_abbr']}"
 
 
 def _no_trade(reason: str, yes_ask: float, sport_label: str, title: str) -> dict:
@@ -196,6 +285,7 @@ def _no_trade(reason: str, yes_ask: float, sport_label: str, title: str) -> dict
         "edge":          0.0,
         "reason":        reason,
         "market_label":  sport_label or "Sports",
+        "is_ingame":     False,
         "rsi": 0, "macd": 0, "momentum": 0, "vwap": 0, "price": 0,
         "rsi_bias": None, "macd_bias": None, "momentum_bias": None, "vwap_bias": None,
     }

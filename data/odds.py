@@ -173,4 +173,4 @@ def find_matching_odds(odds_games: list[dict], home_abbr: str, away_abbr: str,
         if score > best_score:
             best_score, best = score, g
 
-    return best if best_score >= 2 else None
+    return best if best_score >= 4 else None

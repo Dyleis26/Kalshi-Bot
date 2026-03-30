@@ -4,6 +4,7 @@ import signal
 import threading
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from administration.portfolio import Portfolio
 from administration.monitor import Monitor
 from administration.discord import Discord
@@ -218,10 +219,9 @@ class Trader:
             return
 
         with self._lock:
-            decision = self.strategy.decide(
-                state["df_1h"].copy(),
-                state["df_15m"].copy(),
-            )
+            df_1h_snap  = state["df_1h"].copy()
+            df_15m_snap = state["df_15m"].copy()
+        decision = self.strategy.decide(df_1h_snap, df_15m_snap)
 
         direction = decision["direction"]
         self.monitor.record_signal(direction, decision["signals"])
@@ -909,7 +909,7 @@ class Trader:
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
                 direction=direction, contracts=contracts, contracts_filled=contracts,
-                price_pct=price_pct, pnl=pnl, portfolio_total=port_total,
+                price_pct=100.0, pnl=pnl, portfolio_total=port_total,
                 market_label=market_label,
                 session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )
@@ -946,7 +946,7 @@ class Trader:
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(
                 direction=direction, contracts=contracts, contracts_filled=contracts,
-                price_pct=price_pct, pnl=pnl, portfolio_total=port_total,
+                price_pct=0.0, pnl=pnl, portfolio_total=port_total,
                 market_label=market_label,
                 session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )
@@ -1036,7 +1036,7 @@ class Trader:
             self.stop("Keyboard interrupt")
 
     def _is_new_day(self) -> bool:
-        now_et = datetime.now(timezone.utc) - timedelta(hours=4)
+        now_et = datetime.now(ZoneInfo("America/New_York"))
         today  = now_et.date()
         if self._last_reset_date is None:
             self._last_reset_date = today

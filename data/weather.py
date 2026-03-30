@@ -21,7 +21,7 @@ Cached 10 minutes per source to avoid hammering on every 5-min poll.
 
 import logging
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 from typing import Optional
 
 logger = logging.getLogger("weather")
@@ -87,12 +87,30 @@ def get_forecast(lat: float, lng: float, city: str = "") -> Optional[dict]:
             logger.warning("NWS forecast returned no periods")
             return None
 
-        # Use the first daytime period (today's forecast)
+        # Kalshi weather markets are for TOMORROW — find the first daytime period
+        # whose startTime falls on tomorrow's date. Fall back to the first daytime
+        # period if tomorrow's date can't be matched (e.g., late-night when NWS
+        # hasn't posted tomorrow's forecast yet).
+        tomorrow = date.today() + timedelta(days=1)
         period = None
         for p in periods:
-            if p.get("isDaytime", True):
-                period = p
-                break
+            if not p.get("isDaytime", True):
+                continue
+            start_str = p.get("startTime", "")
+            if start_str:
+                try:
+                    period_date = datetime.fromisoformat(start_str).date()
+                    if period_date == tomorrow:
+                        period = p
+                        break
+                except (ValueError, TypeError):
+                    pass
+        # Fallback: first daytime period (could be today — better than nothing)
+        if period is None:
+            for p in periods:
+                if p.get("isDaytime", True):
+                    period = p
+                    break
         if period is None:
             period = periods[0]
 
@@ -154,7 +172,7 @@ def get_open_meteo(lat: float, lng: float, city: str = "") -> Optional[dict]:
                 "daily":            "temperature_2m_max,precipitation_probability_max",
                 "temperature_unit": "fahrenheit",
                 "timezone":         "auto",
-                "forecast_days":    1,
+                "forecast_days":    2,  # fetch 2 days so index [1] = tomorrow
             },
             timeout=10,
         )
@@ -164,11 +182,13 @@ def get_open_meteo(lat: float, lng: float, city: str = "") -> Optional[dict]:
 
         data  = resp.json()
         daily = data.get("daily", {})
-        temps = daily.get("temperature_2m_max", [None])
-        precips = daily.get("precipitation_probability_max", [None])
+        temps   = daily.get("temperature_2m_max", [])
+        precips = daily.get("precipitation_probability_max", [])
 
-        high_f   = float(temps[0])   if temps   and temps[0]   is not None else None
-        precip_p = float(precips[0]) / 100.0 if precips and precips[0] is not None else 0.0
+        # Kalshi weather markets are for TOMORROW — use index [1] if available, else [0]
+        idx = 1 if len(temps) > 1 else 0
+        high_f   = float(temps[idx])   if len(temps) > idx   and temps[idx]   is not None else None
+        precip_p = float(precips[idx]) / 100.0 if len(precips) > idx and precips[idx] is not None else 0.0
 
         result = {
             "city":        city or f"{lat:.2f},{lng:.2f}",

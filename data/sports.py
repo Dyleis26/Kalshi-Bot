@@ -328,6 +328,7 @@ def _mlb_half_innings_remaining(inning: int, short_detail: str) -> Optional[int]
     Compute half-innings remaining from current inning and short_detail.
     "Top 5th" → (9-5)*2 + 2 = 10 half-innings
     "Bot 5th" → (9-5)*2 + 1 = 9 half-innings
+    Extra innings (inning > 9): only the current half-inning remains (sudden death).
     """
     detail = short_detail.lower()
     if "top" in detail or "mid" in detail:
@@ -337,6 +338,9 @@ def _mlb_half_innings_remaining(inning: int, short_detail: str) -> Optional[int]
     else:
         return None
 
+    if inning >= 9:
+        # Extra innings: no guaranteed future innings — treat as 1 half-inning remaining
+        return half
     remaining = (9 - inning) * 2 + half
     return max(remaining, 0)
 
@@ -395,12 +399,10 @@ def get_nba_momentum(game_id: str) -> dict | None:
         away_pts = 0
 
         for play in recent:
-            pts = int(play.get("scoringPlay", False)) and int(play.get("pointAfterPlay", 0) or 0)
-            # ESPN play-by-play uses team homeAway indicator
-            team = play.get("team", {})
-            home_away = team.get("homeAway", "")
             if not play.get("scoringPlay", False):
                 continue
+            team = play.get("team", {})
+            home_away = team.get("homeAway", "")
             # Parse points from the play description
             play_pts = _extract_points(play.get("text", ""))
             if home_away == "home":

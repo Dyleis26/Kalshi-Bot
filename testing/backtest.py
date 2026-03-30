@@ -83,11 +83,7 @@ class Backtest:
 
             # Simulate trade
             contract_price = self._estimate_contract_price(direction, candle)
-            size = self.strategy.size(
-                capital=self.portfolio.capital,
-                contract_price=contract_price,
-                size_multiplier=self.portfolio.size_multiplier
-            )
+            size = self.strategy.size()
 
             # Determine outcome on the next candle (i+1)
             outcome = self._resolve_outcome(direction, i)

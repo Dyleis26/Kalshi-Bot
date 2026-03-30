@@ -79,8 +79,10 @@ class Trader:
         self._open_stake    = 0.0
         self._last_1h_refresh = 0.0
 
-        # One-trade-per-window/market: stores the last traded ticker per slot
+        # One-trade-per-window/market: stores the last traded ticker per slot (crypto: datetime; others: unused)
         self._last_trade_key: dict = {k: None for k in SLOTS}
+        # Accumulates every ticker traded this session per slot — blocks weather re-entry across markets
+        self._traded_tickers: dict = {k: set() for k in SLOTS}
         # In-game re-entry cooloff: {ticker: last_entry_monotonic_time}
         self._ingame_trade_times: dict = {}
 
@@ -454,6 +456,14 @@ class Trader:
 
         slot_type = slot_cfg["type"]
 
+        # One trade per weather slot per session
+        if slot_type == "weather":
+            with self._lock:
+                if self._traded_tickers[slot_key]:
+                    logger.info(f"{slot_key}: already traded this session — skipping slot")
+                    self._release_trade_slot(slot_key)
+                    return
+
         # --- Phase 1: evaluate ALL markets, collect valid candidates ---
         candidates = []
         now_mono = time.monotonic()
@@ -476,10 +486,10 @@ class Trader:
             else:
                 self._market_price_seen[ticker] = {"price": yes_ask, "last_changed": now_mono}
 
-            # Pre-entry re-entry guard for weather (one trade per market)
+            # Pre-entry re-entry guard for weather (one trade per market per session)
             if slot_type != "sports":
                 with self._lock:
-                    if self._last_trade_key[slot_key] == ticker:
+                    if ticker in self._traded_tickers[slot_key]:
                         logger.info(f"{slot_key}: already traded market {ticker} — skipping")
                         continue
 
@@ -658,6 +668,8 @@ class Trader:
             self._open_stake = round(self._open_stake + total_cost, 2)
             portfolio_after  = round(self.portfolio.total - self._open_stake, 2)
             self._last_trade_key[slot_key] = trade_key
+            if slot_type != "crypto":
+                self._traded_tickers[slot_key].add(trade_key)
             # Record ingame trade time for cooloff tracking (game-level key)
             if slot_type == "sports":
                 _gk = trade_key.rsplit('-', 1)[0] if trade_key.count('-') >= 2 else trade_key

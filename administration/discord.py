@@ -47,7 +47,12 @@ class Discord:
         }
         def _post():
             try:
-                requests.post(self.url, json={"embeds": [embed]}, timeout=5)
+                r = requests.post(self.url, json={"embeds": [embed]}, timeout=5)
+                if r.status_code == 429:
+                    retry_after = r.json().get("retry_after", "?")
+                    logger.warning(f"Discord rate limited — retry_after={retry_after}s")
+                elif r.status_code not in (200, 204):
+                    logger.warning(f"Discord send failed: HTTP {r.status_code} — {r.text[:200]}")
             except Exception as e:
                 logger.warning(f"Discord send failed: {e}")
         threading.Thread(target=_post, daemon=True).start()

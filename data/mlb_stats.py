@@ -68,22 +68,30 @@ def get_mlb_win_probability(home_abbr: str, away_abbr: str) -> Optional[tuple]:
 
 
 def _fetch(home_abbr: str, away_abbr: str) -> Optional[tuple]:
-    """Internal: fetch today's schedule, match the game, pull live feed."""
+    """Internal: fetch today's schedule, match the game, pull live feed.
+
+    Checks both today and yesterday (UTC) because US evening games run past
+    midnight UTC, so 'today' on the VPS is already tomorrow US-time.
+    """
+    from datetime import timedelta
     try:
-        today_str = date.today().strftime("%Y-%m-%d")
-        resp = requests.get(
-            f"{MLB_BASE}/schedule",
-            params={"sportId": 1, "date": today_str, "hydrate": "linescore,teams"},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            return None
+        today = date.today()
+        dates_to_try = [today.strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")]
 
-        game_pk = _match_game(resp.json(), home_abbr.lower(), away_abbr.lower())
-        if not game_pk:
-            return None
+        for date_str in dates_to_try:
+            resp = requests.get(
+                f"{MLB_BASE}/schedule",
+                params={"sportId": 1, "date": date_str, "hydrate": "linescore,teams"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
 
-        return _live_win_prob(game_pk)
+            game_pk = _match_game(resp.json(), home_abbr.lower(), away_abbr.lower())
+            if game_pk:
+                return _live_win_prob(game_pk)
+
+        return None
 
     except Exception as e:
         logger.debug(f"MLB Stats lookup error ({away_abbr}@{home_abbr}): {e}")

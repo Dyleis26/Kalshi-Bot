@@ -265,14 +265,13 @@ def compute_win_probability(game: dict, espn_sport: str) -> tuple:
     if status != "in" or period == 0:
         return (game["home_win_pct"], game["away_win_pct"])
 
-    minutes_rem = _minutes_remaining(espn_sport, period, clock, game.get("display_clock", ""))
-    if minutes_rem is None:
-        return (game["home_win_pct"], game["away_win_pct"])
-
     rate = _SCORING_RATE.get(espn_sport)
 
     if rate is not None:
         # Continuous scoring sports (NBA / NHL)
+        minutes_rem = _minutes_remaining(espn_sport, period, clock, game.get("display_clock", ""))
+        if minutes_rem is None:
+            return (game["home_win_pct"], game["away_win_pct"])
         # Minimum 0.5 min to avoid division by zero on final buzzer
         t = max(minutes_rem, 0.5)
         sigma = sqrt(rate * t)
@@ -280,7 +279,7 @@ def compute_win_probability(game: dict, espn_sport: str) -> tuple:
         # Φ(z) = 0.5 * (1 + erf(z / sqrt(2)))
         home_p = max(0.01, min(0.99, 0.5 * (1.0 + erf(z / sqrt(2)))))
     else:
-        # MLB: inning-based model
+        # MLB: inning-based model (minutes_rem is irrelevant here)
         half_innings = _mlb_half_innings_remaining(period, game.get("display_clock", ""))
         if half_innings is None:
             return (game["home_win_pct"], game["away_win_pct"])

@@ -18,6 +18,10 @@ import logging
 from data.sports import get_games, find_matching_game, compute_win_probability, get_nba_momentum
 from data.odds import get_odds, find_matching_odds
 from data.mlb_stats import get_mlb_win_probability
+from data.team_stats import (
+    get_nhl_standings, get_mlb_standings,
+    get_espn_l10, get_espn_h2h,
+)
 from administration.config import (
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX,
     SPORTS_EDGE_MIN, SPORTS_CONTRACT_PRICE_MIN, SPORTS_CONTRACT_PRICE_MAX,
@@ -155,6 +159,63 @@ class SportsStrategy:
         edge = yes_team_win_pct - yes_ask
         market_label = _build_label(sport_label, title, game, yes_sub)
 
+        # ------------------------------------------------------------------ #
+        #  Team records, L10 form, and H2H                                    #
+        # ------------------------------------------------------------------ #
+        home_record = game.get("home_record", "")
+        away_record = game.get("away_record", "")
+        home_home_record = game.get("home_home_record", "")
+        away_road_record = game.get("away_road_record", "")
+        home_l10 = away_l10 = ""
+        h2h_series = None
+
+        # Pull official standings (NHL / MLB) for richer L10 + splits
+        if espn_sport == "hockey/nhl":
+            standings = get_nhl_standings()
+            hst = standings.get(game.get("home_abbr", ""), {})
+            ast = standings.get(game.get("away_abbr", ""), {})
+            if hst:
+                home_record      = hst["record"]
+                home_home_record = hst["home"]
+                home_l10         = hst["l10"]
+            if ast:
+                away_record      = ast["record"]
+                away_road_record = ast["road"]
+                away_l10         = ast["l10"]
+        elif espn_sport == "baseball/mlb":
+            standings = get_mlb_standings()
+            hst = standings.get(game.get("home_abbr", ""), {})
+            ast = standings.get(game.get("away_abbr", ""), {})
+            if hst:
+                home_record      = hst["record"]
+                home_home_record = hst["home"]
+            if ast:
+                away_record      = ast["record"]
+                away_road_record = ast["road"]
+            # MLB L10 via ESPN schedule
+            hl10 = get_espn_l10(game.get("home_team_id", ""), espn_sport)
+            al10 = get_espn_l10(game.get("away_team_id", ""), espn_sport)
+            home_l10 = f"{hl10[0]}-{hl10[1]}" if hl10 else ""
+            away_l10 = f"{al10[0]}-{al10[1]}" if al10 else ""
+        else:
+            # NBA — L10 from ESPN schedule
+            hl10 = get_espn_l10(game.get("home_team_id", ""), espn_sport)
+            al10 = get_espn_l10(game.get("away_team_id", ""), espn_sport)
+            home_l10 = f"{hl10[0]}-{hl10[1]}" if hl10 else ""
+            away_l10 = f"{al10[0]}-{al10[1]}" if al10 else ""
+
+        # H2H season series (all sports via ESPN summary)
+        h2h_series = get_espn_h2h(game.get("game_id", ""), espn_sport)
+
+        # Log context line for all pre-game trades
+        if not is_live:
+            logger.info(
+                f"Sports [{sport_label}] context: "
+                f"home {game.get('home_abbr','')} {home_record} (home {home_home_record}, L10 {home_l10}) | "
+                f"away {game.get('away_abbr','')} {away_record} (road {away_road_record}, L10 {away_l10}) | "
+                f"H2H: {h2h_series or 'n/a'}"
+            )
+
         src = prob_source + momentum_tag
         if edge >= SPORTS_EDGE_MIN:
             direction = LONG
@@ -178,18 +239,27 @@ class SportsStrategy:
         logger.info(f"Sports [{sport_label}]: {reason}")
 
         return {
-            "direction":      direction,
-            "confidence":     round(abs(edge), 4),
-            "confidence_pct": round(min(abs(edge) / 0.5 * 100, 100.0), 1),
-            "external_prob":  round(yes_team_win_pct, 4),
-            "kalshi_yes":     round(yes_ask, 4),
-            "edge":           round(edge, 4),
-            "reason":         reason,
-            "market_label":   market_label,
-            "is_ingame":      is_live,
-            "game_score":     f"{game['score_home']}-{game['score_away']}",
-            "game_period":    game.get("period", 0),
-            "game_clock":     game.get("clock", ""),
+            "direction":         direction,
+            "confidence":        round(abs(edge), 4),
+            "confidence_pct":    round(min(abs(edge) / 0.5 * 100, 100.0), 1),
+            "external_prob":     round(yes_team_win_pct, 4),
+            "kalshi_yes":        round(yes_ask, 4),
+            "edge":              round(edge, 4),
+            "reason":            reason,
+            "market_label":      market_label,
+            "is_ingame":         is_live,
+            "game_score":        f"{game['score_home']}-{game['score_away']}",
+            "game_period":       game.get("period", 0),
+            "game_clock":        game.get("clock", ""),
+            "score_validated":   game.get("score_validated", False),
+            # Team records and form
+            "home_record":       home_record,
+            "away_record":       away_record,
+            "home_home_record":  home_home_record,
+            "away_road_record":  away_road_record,
+            "home_l10":          home_l10,
+            "away_l10":          away_l10,
+            "h2h_series":        h2h_series,
             # Crypto-compatible empty fields for trade log
             "rsi": 0, "macd": 0, "momentum": 0, "vwap": 0, "price": 0,
             "rsi_bias": None, "macd_bias": None, "momentum_bias": None, "vwap_bias": None,

@@ -73,6 +73,7 @@ def get_games(espn_sport: str) -> list[dict]:
 
         for event in events:
             try:
+                event["_espn_sport"] = espn_sport   # pass sport context to _parse_event
                 game = _parse_event(event)
                 if game:
                     games.append(game)
@@ -109,6 +110,24 @@ def _parse_event(event: dict) -> Optional[dict]:
     home_abbr = home.get("team", {}).get("abbreviation", "")
     away_team = away.get("team", {}).get("displayName", "")
     away_abbr = away.get("team", {}).get("abbreviation", "")
+    home_team_id = str(home.get("team", {}).get("id", ""))
+    away_team_id = str(away.get("team", {}).get("id", ""))
+
+    # Team records — already embedded in ESPN scoreboard (total, home, road)
+    home_record = home_home_record = ""
+    away_record = away_road_record = ""
+    for rec in home.get("records", []):
+        rtype = rec.get("type", "")
+        if rtype in ("total", "ytd"):   # ESPN uses "ytd" for NHL overall record
+            home_record = rec.get("summary", "")
+        elif rtype == "home":
+            home_home_record = rec.get("summary", "")
+    for rec in away.get("records", []):
+        rtype = rec.get("type", "")
+        if rtype in ("total", "ytd"):
+            away_record = rec.get("summary", "")
+        elif rtype == "road":
+            away_road_record = rec.get("summary", "")
 
     # Status
     status_obj = event.get("status", {})
@@ -132,6 +151,7 @@ def _parse_event(event: dict) -> Optional[dict]:
     score_home = _parse_score(home)
     score_away = _parse_score(away)
     score_diff = score_home - score_away   # positive = home leading
+    score_validated = False   # will be set True if NHL API confirms
 
     # Pre-game moneyline odds
     home_win_pct = 0.5
@@ -152,24 +172,53 @@ def _parse_event(event: dict) -> Optional[dict]:
             has_odds = True
 
     start_time = event.get("date", "")
+    espn_sport_hint = event.get("_espn_sport", "")  # injected by get_games()
+
+    # NHL live score cross-validation — correct stale/wrong ESPN scores using
+    # the official NHL API before any model computation uses them.
+    if status == "in" and "nhl" in espn_sport_hint:
+        try:
+            from data.team_stats import get_nhl_live_scores
+            nhl_scores = get_nhl_live_scores()
+            nhl_key = f"{away_abbr}@{home_abbr}"
+            if nhl_key in nhl_scores:
+                nhl = nhl_scores[nhl_key]
+                if nhl["score_home"] != score_home or nhl["score_away"] != score_away:
+                    logger.warning(
+                        f"NHL score mismatch [{nhl_key}]: ESPN={score_home}-{score_away} "
+                        f"NHL_API={nhl['score_home']}-{nhl['score_away']} — using NHL API"
+                    )
+                    score_home = nhl["score_home"]
+                    score_away = nhl["score_away"]
+                    score_diff = score_home - score_away
+                score_validated = True
+        except Exception as e:
+            logger.debug(f"NHL score cross-validation error: {e}")
 
     return {
-        "home_team":     home_team,
-        "home_abbr":     home_abbr,
-        "away_team":     away_team,
-        "away_abbr":     away_abbr,
-        "home_win_pct":  round(home_win_pct, 4),
-        "away_win_pct":  round(away_win_pct, 4),
-        "has_odds":      has_odds,
-        "status":        status,
-        "display_clock": short_detail,
-        "period":        period,
-        "clock":         clock_str,
-        "score_home":    score_home,
-        "score_away":    score_away,
-        "score_diff":    score_diff,
-        "game_id":       event.get("id", ""),
-        "start_time":    start_time,
+        "home_team":         home_team,
+        "home_abbr":         home_abbr,
+        "away_team":         away_team,
+        "away_abbr":         away_abbr,
+        "home_team_id":      home_team_id,
+        "away_team_id":      away_team_id,
+        "home_record":       home_record,
+        "away_record":       away_record,
+        "home_home_record":  home_home_record,
+        "away_road_record":  away_road_record,
+        "home_win_pct":      round(home_win_pct, 4),
+        "away_win_pct":      round(away_win_pct, 4),
+        "has_odds":          has_odds,
+        "status":            status,
+        "display_clock":     short_detail,
+        "period":            period,
+        "clock":             clock_str,
+        "score_home":        score_home,
+        "score_away":        score_away,
+        "score_diff":        score_diff,
+        "score_validated":   score_validated,
+        "game_id":           event.get("id", ""),
+        "start_time":        start_time,
     }
 
 

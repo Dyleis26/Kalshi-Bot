@@ -82,6 +82,16 @@ COLUMNS = [
     "fng_value",          # BTC: Fear & Greed index value at entry (0–100)
     "news_bias",          # BTC: news context bias ("bullish"/"bearish"/"neutral")
     "news_score",         # BTC: net news score at entry
+
+    # Sports team records and form (all populated at entry, null for non-sports slots)
+    "home_record",        # Sports: home team season W-L (or W-L-OTL for NHL) e.g. "32-18-5"
+    "away_record",        # Sports: away team season W-L
+    "home_home_record",   # Sports: home team's record at home e.g. "18-7-2"
+    "away_road_record",   # Sports: away team's record on the road
+    "home_l10",           # Sports: home team last 10 games W-L (or W-L-OTL)
+    "away_l10",           # Sports: away team last 10 games W-L
+    "h2h_series",         # Sports: current season series e.g. "LAC leads 2-0"
+    "score_validated",    # Sports: 1 if live score confirmed by 2nd source (NHL API), 0 otherwise
 ]
 
 
@@ -174,6 +184,15 @@ class TradeLog:
             "fng_value":          signals.get("fng_value"),
             "news_bias":          signals.get("news_bias"),
             "news_score":         signals.get("news_score"),
+            # Sports team records and form
+            "home_record":        signals.get("home_record"),
+            "away_record":        signals.get("away_record"),
+            "home_home_record":   signals.get("home_home_record"),
+            "away_road_record":   signals.get("away_road_record"),
+            "home_l10":           signals.get("home_l10"),
+            "away_l10":           signals.get("away_l10"),
+            "h2h_series":         signals.get("h2h_series"),
+            "score_validated":    int(bool(signals.get("score_validated", False))),
         })
 
         self._append_row(row)
@@ -277,6 +296,8 @@ class TradeLog:
             "direction", "entry_time", "exit_time",
             "result", "window_direction", "rsi_bias", "macd_bias", "momentum_bias", "vwap_bias",
             "kalshi_ticker", "game_score", "game_clock", "news_bias",
+            "home_record", "away_record", "home_home_record", "away_road_record",
+            "home_l10", "away_l10", "h2h_series",
         ]
         for col in str_cols:
             if col in df.columns:

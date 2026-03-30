@@ -138,7 +138,7 @@ LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 #   cash is NEVER used for losses (record_loss touches capital only)
 #
 SLOT_CAPITAL_PCT = 0.10   # 10% of capital pool per slot (capital ÷ NUM_SLOTS)
-BET_PCT_OF_SLOT  = 0.25   # 25% of slot's capital allocation per trade
+BET_PCT_OF_SLOT  = 0.50   # 50% of slot's capital allocation per trade
 
 # --- Kalshi Contract Price Filter (near-fair zone) ---
 # Only trade when YES is in this range — outside it the payout asymmetry makes
@@ -146,6 +146,8 @@ BET_PCT_OF_SLOT  = 0.25   # 25% of slot's capital allocation per trade
 # YES=0.65 requires 68%+ accuracy to break even; YES=0.50 requires only ~52%.
 CONTRACT_PRICE_MIN = 0.35
 CONTRACT_PRICE_MAX = 0.65
+CONTRACT_BUY_MIN   = 0.05  # Hard floor on actual purchase price — blocks near-zero contracts
+CONTRACT_BUY_MAX   = 0.95  # Hard cap on actual purchase price — blocks illiquid NO asks (e.g. no_ask=0.98)
 
 # --- Equity Futures Trend (direct signal for BTC macro regime) ---
 EQUITY_TREND_ENABLED   = True   # Toggle equity futures signal on/off

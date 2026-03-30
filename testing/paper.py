@@ -10,7 +10,7 @@ from administration.monitor import Monitor
 from administration.discord import Discord
 from administration.config import (
     STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, SLOTS,
-    CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, NEWS_ENABLED,
+    CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, CONTRACT_BUY_MIN, CONTRACT_BUY_MAX, NEWS_ENABLED,
     SLOT_CAPITAL_PCT, BET_PCT_OF_SLOT, NUM_SLOTS,
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
@@ -551,7 +551,14 @@ class Trader:
             no_ask         = float(market.get("no_ask_dollars", 0.5))
             contract_price = yes_ask if direction == LONG else no_ask
 
-            # Dynamic sizing: 25% of this slot's 10% capital allocation.
+            if not (CONTRACT_BUY_MIN <= contract_price <= CONTRACT_BUY_MAX):
+                logger.info(
+                    f"{slot_key} [{ticker}]: no trade — contract price {contract_price:.2f} "
+                    f"outside buy range [{CONTRACT_BUY_MIN:.2f}, {CONTRACT_BUY_MAX:.2f}]"
+                )
+                continue
+
+            # Dynamic sizing: 50% of this slot's 10% capital allocation.
             # Rebalances automatically — portfolio.capital is live after every trade.
             with self._lock:
                 slot_capital = self.portfolio.capital * SLOT_CAPITAL_PCT

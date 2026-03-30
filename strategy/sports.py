@@ -187,6 +187,9 @@ class SportsStrategy:
             "reason":         reason,
             "market_label":   market_label,
             "is_ingame":      is_live,
+            "game_score":     f"{game['score_home']}-{game['score_away']}",
+            "game_period":    game.get("period", 0),
+            "game_clock":     game.get("clock", ""),
             # Crypto-compatible empty fields for trade log
             "rsi": 0, "macd": 0, "momentum": 0, "vwap": 0, "price": 0,
             "rsi_bias": None, "macd_bias": None, "momentum_bias": None, "vwap_bias": None,

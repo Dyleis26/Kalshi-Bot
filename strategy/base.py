@@ -107,6 +107,7 @@ class Strategy:
 
         # News filter: block trades where high-confidence news directly
         # contradicts the technical direction. Medium/neutral news is logged only.
+        news = None
         if direction != NONE and NEWS_ENABLED:
             news = NewsContext.load()
             if news:
@@ -135,6 +136,12 @@ class Strategy:
             "confidence_pct": round(max(bull_count, bear_count) / 6 * 100, 1),
             "signals":        signals,
             "reason":         reason,
+            "bull_votes":     bull_count,
+            "bear_votes":     bear_count,
+            "funding_rate":   funding_data["funding_rate"] if funding_data else None,
+            "fng_value":      fng_data["value"] if fng_data else None,
+            "news_bias":      news["bias"] if news else None,
+            "news_score":     news["score"] if news else None,
         }
 
     # ------------------------------------------------------------------ #

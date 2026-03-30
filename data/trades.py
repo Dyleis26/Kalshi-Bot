@@ -62,6 +62,26 @@ COLUMNS = [
     "capital_after",      # Capital balance after this trade
     "cash_after",         # Cash balance after this trade
     "total_after",        # Total portfolio value after this trade
+
+    # Extended context — filled per slot type, null otherwise
+    "kalshi_ticker",      # Exact Kalshi market ticker traded
+    "external_prob",      # Sports/Weather: model win probability (0.0–1.0)
+    "kalshi_yes_price",   # Sports/Weather: Kalshi YES price at decision time
+    "edge",               # Sports/Weather: external_prob - kalshi_yes_price
+    "is_ingame",          # Sports: 1 if live in-game trade, 0 if pre-game
+    "game_score",         # Sports: score at trade time e.g. "2-3"
+    "game_period",        # Sports: period/quarter/inning number
+    "game_clock",         # Sports: clock remaining e.g. "6:24"
+    "nws_temp",           # Weather: NWS forecast high temp (°F)
+    "om_temp",            # Weather: Open-Meteo forecast high temp (°F)
+    "nws_prob",           # Weather: NWS-derived YES probability
+    "om_prob",            # Weather: Open-Meteo-derived YES probability
+    "bull_votes",         # BTC: number of bullish signals (0–6)
+    "bear_votes",         # BTC: number of bearish signals (0–6)
+    "funding_rate",       # BTC: perpetual funding rate at entry
+    "fng_value",          # BTC: Fear & Greed index value at entry (0–100)
+    "news_bias",          # BTC: news context bias ("bullish"/"bearish"/"neutral")
+    "news_score",         # BTC: net news score at entry
 ]
 
 
@@ -87,7 +107,8 @@ class TradeLog:
                    contract_price_pct: float, confidence_pct: float = 0.0,
                    cost: float = 0.0, possible_payout: float = 0.0, btc_price: float = 0.0,
                    signals: dict = None, asset: str = "BTC",
-                   slot_type: str = "crypto", market_label: str = "") -> str:
+                   slot_type: str = "crypto", market_label: str = "",
+                   kalshi_ticker: str = "") -> str:
         """
         Record a trade entry. Returns a unique trade_id to reference at close.
 
@@ -134,6 +155,25 @@ class TradeLog:
             "macd_bias":          signals.get("macd_bias"),
             "momentum_bias":      signals.get("momentum_bias"),
             "vwap_bias":          signals.get("vwap_bias"),
+            # Extended context
+            "kalshi_ticker":      kalshi_ticker,
+            "external_prob":      signals.get("external_prob"),
+            "kalshi_yes_price":   signals.get("kalshi_yes"),
+            "edge":               signals.get("edge"),
+            "is_ingame":          int(signals.get("is_ingame", False)),
+            "game_score":         signals.get("game_score"),
+            "game_period":        signals.get("game_period"),
+            "game_clock":         signals.get("game_clock"),
+            "nws_temp":           signals.get("nws_temp"),
+            "om_temp":            signals.get("om_temp"),
+            "nws_prob":           signals.get("nws_prob"),
+            "om_prob":            signals.get("om_prob"),
+            "bull_votes":         signals.get("bull_votes"),
+            "bear_votes":         signals.get("bear_votes"),
+            "funding_rate":       signals.get("funding_rate"),
+            "fng_value":          signals.get("fng_value"),
+            "news_bias":          signals.get("news_bias"),
+            "news_score":         signals.get("news_score"),
         })
 
         self._append_row(row)
@@ -236,6 +276,7 @@ class TradeLog:
             "trade_id", "mode", "asset", "slot_type", "market_label",
             "direction", "entry_time", "exit_time",
             "result", "window_direction", "rsi_bias", "macd_bias", "momentum_bias", "vwap_bias",
+            "kalshi_ticker", "game_score", "game_clock", "news_bias",
         ]
         for col in str_cols:
             if col in df.columns:

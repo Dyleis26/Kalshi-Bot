@@ -231,7 +231,7 @@ class Trader:
 
         t = threading.Thread(
             target=self._execute_crypto_trade,
-            args=[direction, decision["signals"], decision["confidence"], decision["confidence_pct"]]
+            args=[direction, decision]
         )
         t.daemon = True
         t.start()
@@ -247,9 +247,21 @@ class Trader:
         self._ticker_cache["BTC"] = {"ticker": ticker, "ts": now}
         return ticker
 
-    def _execute_crypto_trade(self, direction: str, signals: dict, confidence: int = 3, confidence_pct: float = 50.0):
+    def _execute_crypto_trade(self, direction: str, decision: dict):
         """Execute a BTC 15-minute Up/Down trade with full contrarian + near-fair logic."""
         slot_key = "BTC"
+        # Extract and enrich signals with BTC decision metadata for trade storage
+        signals        = dict(decision["signals"])
+        confidence     = decision["confidence"]
+        confidence_pct = decision["confidence_pct"]
+        signals.update({
+            "bull_votes":   decision.get("bull_votes"),
+            "bear_votes":   decision.get("bear_votes"),
+            "funding_rate": decision.get("funding_rate"),
+            "fng_value":    decision.get("fng_value"),
+            "news_bias":    decision.get("news_bias"),
+            "news_score":   decision.get("news_score"),
+        })
 
         # One-trade-per-window: block duplicate entries in the same 15M window
         _now_cw = datetime.now(timezone.utc)
@@ -631,6 +643,7 @@ class Trader:
             asset=slot_key,
             slot_type=slot_type,
             market_label=market_label,
+            kalshi_ticker=kalshi_ticker,
         )
 
         log_trade(direction, contract_price, total_cost, confidence_pct=confidence_pct)

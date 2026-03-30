@@ -140,6 +140,10 @@ class WeatherStrategy:
             "edge":           round(edge, 4),
             "reason":         reason,
             "market_label":   market_label,
+            "nws_temp":       nws.get("high_temp_f") if nws else None,
+            "om_temp":        om.get("high_temp_f") if om else None,
+            "nws_prob":       round(nws_prob, 4) if nws_prob is not None else None,
+            "om_prob":        round(om_prob, 4) if om_prob is not None else None,
             # Crypto-compatible fields (empty) for trade log
             "rsi": 0, "macd": 0, "momentum": 0, "vwap": 0, "price": 0,
             "rsi_bias": None, "macd_bias": None, "momentum_bias": None, "vwap_bias": None,

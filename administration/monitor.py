@@ -138,8 +138,8 @@ class Monitor:
         s = self.status()
         logger.info(
             f"STATUS | uptime={s['uptime']} | "
-            f"trades={s['today']['trades']} | "
+            f"entries={s['today']['orders_placed']} | "
+            f"settled={s['today']['trades']} ({s['today']['wins']}W-{s['today']['losses']}L) | "
             f"win_rate={s['today']['win_rate']} | "
-            f"halted={s['halted']} | "
-            f"positions={s['open_positions']}"
+            f"halted={s['halted']}"
         )

@@ -256,6 +256,7 @@ class Trader:
         self.monitor.record_signal(direction, decision["signals"])
 
         if direction == NONE:
+            logger.info(f"BTC: no trade — {decision['reason']}")
             return
 
         t = threading.Thread(
@@ -772,7 +773,8 @@ class Trader:
         t = threading.Thread(
             target=self._monitor_position,
             args=[slot_key, slot_type, direction, contracts, contract_price, price_pct,
-                  trade_id, kalshi_ticker, settlement_open, seconds_until_settlement, market_label]
+                  trade_id, kalshi_ticker, settlement_open, seconds_until_settlement,
+                  market_label, confidence_pct]
         )
         t.daemon = True
         t.start()
@@ -785,7 +787,7 @@ class Trader:
                           direction: str, contracts: int,
                           contract_price: float, price_pct: float, trade_id: str,
                           kalshi_ticker: str, settlement_open, seconds_until_settlement: float,
-                          market_label: str = ""):
+                          market_label: str = "", confidence_pct: float = 0.0):
         """
         Poll the Kalshi contract price every 10s and exit early if:
           - Stop-loss: contract price drops to <= STOP_LOSS_PRICE
@@ -836,7 +838,7 @@ class Trader:
                 )
                 self._exit_early(slot_key, slot_type, direction, contracts, contract_price,
                                  current_price, trade_id, "trailing-profit", fresh_ticker,
-                                 market_label=market_label)
+                                 market_label=market_label, confidence_pct=confidence_pct)
                 return
 
             if current_price <= stop_threshold:
@@ -846,7 +848,7 @@ class Trader:
                 )
                 self._exit_early(slot_key, slot_type, direction, contracts, contract_price,
                                  current_price, trade_id, "stop-loss", fresh_ticker,
-                                 market_label=market_label)
+                                 market_label=market_label, confidence_pct=confidence_pct)
                 return
 
         if self.running:
@@ -854,14 +856,14 @@ class Trader:
             try:
                 self._resolve_trade(slot_key, slot_type, direction, contracts, contract_price,
                                     price_pct, trade_id, kalshi_ticker, settlement_open,
-                                    market_label=market_label)
+                                    market_label=market_label, confidence_pct=confidence_pct)
             except Exception as exc:
                 logger.exception(f"{slot_key}: _resolve_trade crashed — trade_id={trade_id}: {exc}")
 
     def _exit_early(self, slot_key: str, slot_type: str, direction: str, contracts: int,
                     contract_price: float, exit_price: float,
                     trade_id: str, reason: str, kalshi_ticker: str = None,
-                    market_label: str = ""):
+                    market_label: str = "", confidence_pct: float = 0.0):
         """Resolve a trade early at exit_price (stop-loss or trailing profit)."""
         if self.live and kalshi_ticker:
             side = "yes" if direction == LONG else "no"
@@ -897,7 +899,8 @@ class Trader:
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
                 self._consec_losses[slot_key] = 0
-            log_trade(direction, contract_price, actual_cost, result="win", pnl=pnl)
+            log_trade(direction, contract_price, actual_cost, result="win", pnl=pnl,
+                      confidence_pct=confidence_pct)
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
@@ -915,7 +918,8 @@ class Trader:
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
                 self._consec_losses[slot_key] = min(self._consec_losses[slot_key] + 1, 10)
-            log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl)
+            log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl,
+                      confidence_pct=confidence_pct)
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(
@@ -944,7 +948,8 @@ class Trader:
                        direction: str, contracts: int,
                        contract_price: float, price_pct: float,
                        trade_id: str, kalshi_ticker: str = None,
-                       settlement_open=None, market_label: str = ""):
+                       settlement_open=None, market_label: str = "",
+                       confidence_pct: float = 0.0):
         """Resolve a trade at Kalshi settlement."""
         kalshi_result = None
         if kalshi_ticker:
@@ -1017,7 +1022,8 @@ class Trader:
                     self._tracked_windows.setdefault(
                         settlement_open, {"wins": 0, "losses": 0}
                     )["wins"] += 1
-            log_trade(direction, contract_price, actual_cost, result="win", pnl=pnl)
+            log_trade(direction, contract_price, actual_cost, result="win", pnl=pnl,
+                      confidence_pct=confidence_pct)
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
@@ -1054,7 +1060,8 @@ class Trader:
                     _cutoff = settlement_open - timedelta(minutes=30)
                     for _k in [k for k in self._tracked_windows if k < _cutoff]:
                         del self._tracked_windows[_k]
-            log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl)
+            log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl,
+                      confidence_pct=confidence_pct)
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(

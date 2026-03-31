@@ -820,6 +820,16 @@ class Trader:
             if slot_type == "crypto":
                 fresh_ticker = self._get_btc_ticker() or kalshi_ticker
 
+            # Sports: check for early Kalshi resolution (close_time may be days away
+            # but markets resolve within minutes of game end)
+            if slot_type != "crypto" and kalshi_ticker:
+                early_result = self.kalshi.get_market_result(kalshi_ticker)
+                if early_result is not None:
+                    logger.info(
+                        f"{slot_key}: early settlement — Kalshi resolved {kalshi_ticker} → {early_result.upper()}"
+                    )
+                    break
+
             current_price = self.kalshi.get_market_price(fresh_ticker, side)
             if not (0.05 < current_price < 0.95):
                 continue
@@ -853,7 +863,7 @@ class Trader:
                 return
 
         if self.running:
-            logger.info(f"{slot_key}: settlement timer fired — resolving trade_id={trade_id}")
+            logger.info(f"{slot_key}: settling trade_id={trade_id}")
             try:
                 self._resolve_trade(slot_key, slot_type, direction, contracts, contract_price,
                                     price_pct, trade_id, kalshi_ticker, settlement_open,

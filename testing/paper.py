@@ -464,6 +464,7 @@ class Trader:
         with self._lock:
             session_count = self._session_trade_counts[slot_key]
         if session_count >= SPORTS_SESSION_MAX:
+            logger.info(f"{slot_key}: session cap reached ({session_count}/{SPORTS_SESSION_MAX}) — skipping slot")
             return
         if not self._within_trade_limit(slot_key):
             return

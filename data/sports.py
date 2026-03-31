@@ -412,12 +412,12 @@ def _mlb_half_innings_remaining(inning: int, short_detail: str) -> Optional[int]
 
 
 def _parse_clock(clock: str) -> Optional[float]:
-    """Parse "M:SS" clock string into decimal minutes. Returns None on failure."""
+    """Parse "M:SS" or "M:SS.s" clock string into decimal minutes. Returns None on failure."""
     if not clock or ':' not in clock:
         return None
     try:
         parts = clock.split(':')
-        return int(parts[0]) + int(parts[1]) / 60.0
+        return int(parts[0]) + float(parts[1]) / 60.0
     except (ValueError, IndexError):
         return None
 

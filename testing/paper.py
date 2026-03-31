@@ -1,5 +1,7 @@
 import time
 import math
+import os
+import json
 import signal
 import threading
 import pandas as pd
@@ -15,7 +17,7 @@ from administration.config import (
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
     MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS, SPORTS_INGAME_COOLOFF_MINS,
-    INGAME_STALE_MARKET_SECS,
+    INGAME_STALE_MARKET_SECS, SPORTS_SESSION_MAX,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -28,6 +30,9 @@ from strategy.sports import SportsStrategy
 from administration.logger import get as get_logger, log_trade, log_halt
 
 logger = get_logger("paper")
+
+# Path for persisting last BTC trade window across restarts (prevents backfill double-entry)
+_TRADE_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".btc_last_trade.json")
 
 
 class Trader:
@@ -68,6 +73,8 @@ class Trader:
         # Per-slot rate limiting and state tracking
         self.trades_this_hour  = {k: 0 for k in SLOTS}
         self.hour_window_start = {k: time.monotonic() for k in SLOTS}
+        # Per-slot session trade cap (non-crypto only): resets on restart, prevents flooding
+        self._session_trade_counts: dict = {k: 0 for k in SLOTS}
 
         # Kalshi ticker cache (15s TTL — only used for BTC/crypto slot)
         self._ticker_cache: dict = {"BTC": {"ticker": None, "ts": 0.0}}
@@ -81,6 +88,20 @@ class Trader:
 
         # One-trade-per-window/market: stores the last traded ticker per slot (crypto: datetime; others: unused)
         self._last_trade_key: dict = {k: None for k in SLOTS}
+        # Restore last BTC window from disk — prevents backfill candle re-entering the same window on restart
+        try:
+            with open(_TRADE_STATE_FILE) as _f:
+                _state = json.load(_f)
+                _iso = _state.get("BTC")
+                if _iso:
+                    _ts = datetime.fromisoformat(_iso)  # tz-naive
+                    if (datetime.utcnow() - _ts).total_seconds() < 900:
+                        self._last_trade_key["BTC"] = _ts
+                        logger.info(f"Restored last BTC window from disk: {_ts.strftime('%H:%M')}")
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.warning(f"Could not restore BTC trade state from disk: {exc}")
         # Accumulates every ticker traded this session per slot — blocks weather re-entry across markets
         self._traded_tickers: dict = {k: set() for k in SLOTS}
         # In-game re-entry cooloff: {ticker: last_entry_monotonic_time}
@@ -439,6 +460,10 @@ class Trader:
         """
         if time.monotonic() < self._ready_at:
             return
+        with self._lock:
+            session_count = self._session_trade_counts[slot_key]
+        if session_count >= SPORTS_SESSION_MAX:
+            return
         if not self._within_trade_limit(slot_key):
             return
         if not FORCE_TRADE and not self.portfolio.can_trade():
@@ -683,6 +708,14 @@ class Trader:
             self._last_trade_key[slot_key] = trade_key
             if slot_type != "crypto":
                 self._traded_tickers[slot_key].add(trade_key)
+                self._session_trade_counts[slot_key] += 1
+            if slot_key == "BTC":
+                try:
+                    with open(_TRADE_STATE_FILE, "w") as _f:
+                        json.dump({"BTC": trade_key.isoformat()}, _f)
+                    logger.info(f"BTC: trade state persisted ({trade_key.strftime('%H:%M')} window)")
+                except Exception as exc:
+                    logger.warning(f"BTC: could not persist trade state to disk: {exc}")
             # Record ingame trade time for cooloff tracking (game-level key)
             if slot_type == "sports":
                 _gk = trade_key.rsplit('-', 1)[0] if trade_key.count('-') >= 2 else trade_key
@@ -817,9 +850,13 @@ class Trader:
                 return
 
         if self.running:
-            self._resolve_trade(slot_key, slot_type, direction, contracts, contract_price,
-                                price_pct, trade_id, kalshi_ticker, settlement_open,
-                                market_label=market_label)
+            logger.info(f"{slot_key}: settlement timer fired — resolving trade_id={trade_id}")
+            try:
+                self._resolve_trade(slot_key, slot_type, direction, contracts, contract_price,
+                                    price_pct, trade_id, kalshi_ticker, settlement_open,
+                                    market_label=market_label)
+            except Exception as exc:
+                logger.exception(f"{slot_key}: _resolve_trade crashed — trade_id={trade_id}: {exc}")
 
     def _exit_early(self, slot_key: str, slot_type: str, direction: str, contracts: int,
                     contract_price: float, exit_price: float,

@@ -256,30 +256,31 @@ def find_matching_game(games: list[dict], market_title: str) -> Optional[dict]:
 
     best_game = None
     best_score = 0
+    best_home_score = 0
+    best_away_score = 0
 
     for game in games:
-        score = 0
         home_abbr = game["home_abbr"].lower()
         away_abbr = game["away_abbr"].lower()
         home_words = [w.lower() for w in game["home_team"].split() if len(w) > 2]
         away_words = [w.lower() for w in game["away_team"].split() if len(w) > 2]
 
-        if home_abbr in title_lower:
-            score += 3
-        if away_abbr in title_lower:
-            score += 3
-        for w in home_words:
-            if w in title_lower:
-                score += 1
-        for w in away_words:
-            if w in title_lower:
-                score += 1
+        home_score = (3 if home_abbr in title_lower else 0) + sum(1 for w in home_words if w in title_lower)
+        away_score = (3 if away_abbr in title_lower else 0) + sum(1 for w in away_words if w in title_lower)
+        score = home_score + away_score
 
         if score > best_score:
             best_score = score
             best_game = game
+            best_home_score = home_score
+            best_away_score = away_score
 
+    # Accept if combined score >= 4, OR if both teams have at least 1 word/abbr hit each.
+    # The second condition handles titles like "Washington at Los Angeles L Winner?" where
+    # abbreviations (WAS/LAL) are absent but team words from both sides appear.
     if best_score >= 4:
+        return best_game
+    if best_game is not None and best_home_score > 0 and best_away_score > 0:
         return best_game
     return None
 

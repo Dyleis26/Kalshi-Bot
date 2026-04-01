@@ -88,8 +88,6 @@ INTERVALS = {
 CANDLE_LIMIT = 200    # Historical candles to load on startup
 
 # --- Strategy Thresholds ---
-RSI_BULL = 55         # 1H RSI above this = bullish bias
-RSI_BEAR = 45         # 1H RSI below this = bearish bias
 RSI_PERIOD = 14
 MOMENTUM_MIN = 0.001    # Minimum 0.10% price move to be directional (was 0.05% — too noisy)
 MOMENTUM_LOOKBACK = 3   # Candles to look back for momentum (3 × 15m = 45 min)

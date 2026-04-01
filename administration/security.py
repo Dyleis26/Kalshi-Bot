@@ -95,9 +95,8 @@ def validate_env():
     """
     from administration import config as cfg
     checks = {
-        "KALSHI_API_KEY":    cfg.KALSHI_API_KEY,
-        "KALSHI_KEY_PATH":   cfg.KALSHI_KEY_PATH,
-        "DISCORD_WEBHOOK_URL": cfg.DISCORD_WEBHOOK_URL,
+        "KALSHI_API_KEY":  cfg.KALSHI_API_KEY,
+        "KALSHI_KEY_PATH": cfg.KALSHI_KEY_PATH,
     }
     missing = [key for key, val in checks.items() if not val]
     if missing:

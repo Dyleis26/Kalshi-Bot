@@ -39,6 +39,7 @@ COLUMNS = [
     "macd_bias",          # 'bull' or 'bear'
     "momentum_bias",      # 'bull' or 'bear'
     "vwap_bias",          # 'bull' or 'bear'
+    "bb_bias",            # 'bull', 'bear', or 'neutral' — Bollinger Band extreme
 
     # Window candle (the 15M candle the trade resolves on)
     "window_open",        # BTC open price at start of the 15M window
@@ -72,12 +73,14 @@ COLUMNS = [
     "game_score",         # Sports: score at trade time e.g. "2-3"
     "game_period",        # Sports: period/quarter/inning number
     "game_clock",         # Sports: clock remaining e.g. "6:24"
-    "bull_votes",         # Crypto: number of bullish signals (0–7)
-    "bear_votes",         # Crypto: number of bearish signals (0–7)
+    "bull_votes",         # Crypto: number of bullish signals (0–8)
+    "bear_votes",         # Crypto: number of bearish signals (0–8)
     "funding_rate",       # Crypto: perpetual funding rate at entry
     "fng_value",          # Crypto: Fear & Greed index value at entry (0–100)
     "news_bias",          # Crypto: news context bias ("bullish"/"bearish"/"neutral")
     "news_score",         # Crypto: net news score at entry
+    "equity_bias",        # Crypto: equity futures directional bias ('bull'/'bear'/'neutral')
+    "equity_change",      # Crypto: equity % change over lookback window
 
     # Sports team records and form (all populated at entry, null for non-sports slots)
     "home_record",        # Sports: home team season W-L (or W-L-OTL for NHL) e.g. "32-18-5"
@@ -161,6 +164,7 @@ class TradeLog:
             "macd_bias":          signals.get("macd_bias"),
             "momentum_bias":      signals.get("momentum_bias"),
             "vwap_bias":          signals.get("vwap_bias"),
+            "bb_bias":            signals.get("bb_bias"),
             # Extended context
             "kalshi_ticker":      kalshi_ticker,
             "external_prob":      signals.get("external_prob"),
@@ -176,6 +180,8 @@ class TradeLog:
             "fng_value":          signals.get("fng_value"),
             "news_bias":          signals.get("news_bias"),
             "news_score":         signals.get("news_score"),
+            "equity_bias":        signals.get("equity_bias"),
+            "equity_change":      signals.get("equity_change"),
             # Sports team records and form
             "home_record":        signals.get("home_record"),
             "away_record":        signals.get("away_record"),
@@ -286,7 +292,8 @@ class TradeLog:
         str_cols = [
             "trade_id", "mode", "asset", "slot_type", "market_label",
             "direction", "entry_time", "exit_time",
-            "result", "window_direction", "rsi_bias", "macd_bias", "momentum_bias", "vwap_bias",
+            "result", "window_direction", "rsi_bias", "macd_bias", "momentum_bias", "vwap_bias", "bb_bias",
+            "equity_bias",
             "kalshi_ticker", "game_score", "game_clock", "news_bias",
             "home_record", "away_record", "home_home_record", "away_road_record",
             "home_l10", "away_l10", "h2h_series",

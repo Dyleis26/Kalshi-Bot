@@ -82,6 +82,7 @@ class Strategy:
         # Add 3 extra votes (7 total); majority still determines direction
         biases += [funding_b, fng_b, equity_b]
 
+        num_votes  = len(biases)
         bull_count = biases.count("bull")
         bear_count = biases.count("bear")
 
@@ -113,10 +114,10 @@ class Strategy:
                     reason = f"Force/tie — VWAP fallback ({vwap_side}){extra_tag}"
         elif bull_count >= MIN_CONFIDENCE:
             direction = LONG
-            reason = f"Confluence — {bull_count}/6 bullish{extra_tag}"
+            reason = f"Confluence — {bull_count}/{num_votes} bullish{extra_tag}"
         elif bear_count >= MIN_CONFIDENCE:
             direction = SHORT
-            reason = f"Confluence — {bear_count}/6 bearish{extra_tag}"
+            reason = f"Confluence — {bear_count}/{num_votes} bearish{extra_tag}"
         else:
             direction = NONE
             reason = f"No confluence — bull={bull_count} bear={bear_count}{extra_tag}"
@@ -146,7 +147,6 @@ class Strategy:
             decision=direction
         )
 
-        num_votes = len(biases)
         return {
             "direction":      direction,
             "confidence":     max(bull_count, bear_count),

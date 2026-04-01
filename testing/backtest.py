@@ -150,8 +150,10 @@ class Backtest:
         For backtesting, we assume near-50 cent pricing as a conservative default.
 
         Note: paper.py skips markets where YES is outside [CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX]
-        (default 0.35–0.65). This filter is not simulated here since historical Kalshi prices
-        are not available — backtest trade counts will be higher than live trading.
+        (default 0.35–0.65) and enforces one-trade-per-window. Neither filter is simulated here
+        since historical Kalshi prices are unavailable — backtest trade counts will be higher
+        than live, and signal inputs (funding rate, F&G, equity, news) reflect current market
+        data rather than historical values, making results non-reproducible across runs.
         """
         return 0.50
 

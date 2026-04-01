@@ -34,6 +34,7 @@ logger = get_logger("paper")
 _TRADE_STATE_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".btc_last_trade.json")
 _ETH_TRADE_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".eth_last_trade.json")
 _OPEN_TRADES_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".open_trades.json")
+_SPORTS_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".sports_state.json")
 
 
 class Trader:
@@ -106,7 +107,7 @@ class Trader:
                 _iso = _state.get("BTC")
                 if _iso:
                     _ts = datetime.fromisoformat(_iso)  # tz-naive
-                    if (datetime.utcnow() - _ts).total_seconds() < 900:
+                    if (datetime.now(timezone.utc).replace(tzinfo=None) - _ts).total_seconds() < 900:
                         self._last_trade_key["BTC"] = _ts
                         logger.info(f"Restored last BTC window from disk: {_ts.strftime('%H:%M')}")
         except FileNotFoundError:
@@ -120,7 +121,7 @@ class Trader:
                 _iso = _state.get("ETH")
                 if _iso:
                     _ts = datetime.fromisoformat(_iso)
-                    if (datetime.utcnow() - _ts).total_seconds() < 900:
+                    if (datetime.now(timezone.utc).replace(tzinfo=None) - _ts).total_seconds() < 900:
                         self._last_trade_key["ETH"] = _ts
                         logger.info(f"Restored last ETH window from disk: {_ts.strftime('%H:%M')}")
         except FileNotFoundError:
@@ -133,6 +134,23 @@ class Trader:
         self._ingame_trade_times: dict = {}
         # Per-game daily trade count: {game_key: count} — resets at UTC midnight
         self._game_trade_counts: dict = {}
+        # Restore sports session/game counts from disk (same UTC day only)
+        # Prevents duplicate trades on the same game after a restart with open positions
+        try:
+            with open(_SPORTS_STATE_FILE) as _f:
+                _ss = json.load(_f)
+            if _ss.get("date_utc") == datetime.now(timezone.utc).date().isoformat():
+                _sc = _ss.get("session_counts", {})
+                _gc = _ss.get("game_counts", {})
+                for _k in SLOTS:
+                    if _k in _sc:
+                        self._session_trade_counts[_k] = int(_sc[_k])
+                self._game_trade_counts = {k: int(v) for k, v in _gc.items()}
+                logger.info(f"Restored sports session counts from disk: {self._session_trade_counts}")
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.warning(f"Could not restore sports state from disk: {exc}")
 
         # Correlated-sweep protection
         self._consec_losses:        dict = {k: 0 for k in SLOTS}
@@ -206,7 +224,7 @@ class Trader:
 
         if NEWS_ENABLED:
             t = threading.Thread(
-                target=NewsContext.fetch, args=[["BTC"]], daemon=True
+                target=NewsContext.fetch, args=[["BTC", "ETH"]], daemon=True
             )
             t.start()
 
@@ -222,7 +240,7 @@ class Trader:
         logger.info(f"Trader stopped: {reason}")
 
     # ------------------------------------------------------------------ #
-    #  WebSocket Handlers (BTC only)                                      #
+    #  WebSocket Handlers (BTC + ETH)                                    #
     # ------------------------------------------------------------------ #
 
     def _on_15m_candle(self, asset: str, candle: dict):
@@ -584,6 +602,13 @@ class Trader:
         candidates = []
         now_mono = time.monotonic()
 
+        # Evict stale market price tracking entries (older than 4 hours) — prevents unbounded growth
+        _evict_before = now_mono - 14400
+        stale_tickers = [t for t, v in self._market_price_seen.items()
+                         if v.get("last_changed", 0) < _evict_before]
+        for t in stale_tickers:
+            self._market_price_seen.pop(t, None)
+
         for market in markets:
             ticker = market.get("ticker")
             if not ticker:
@@ -804,6 +829,10 @@ class Trader:
                 _gk = trade_key.rsplit('-', 1)[0] if trade_key.count('-') >= 2 else trade_key
                 self._ingame_trade_times[_gk] = time.monotonic()
                 self._game_trade_counts[_gk] = self._game_trade_counts.get(_gk, 0) + 1
+
+        # Persist sports session/game counts to disk so they survive restarts
+        if slot_type == "sports":
+            self._save_sports_state()
 
         slot_cfg = SLOTS[slot_key]
         trade_id = self.trade_log.open_trade(
@@ -1225,6 +1254,23 @@ class Trader:
         with self._lock:
             self.trades_this_hour[slot_key] = max(0, self.trades_this_hour[slot_key] - 1)
 
+    def _save_sports_state(self):
+        """Persist sports session/game counts to disk (same-day restoration after restart)."""
+        with self._lock:
+            sc = dict(self._session_trade_counts)
+            gc = dict(self._game_trade_counts)
+        with self._file_lock:
+            try:
+                state = {
+                    "date_utc":       datetime.now(timezone.utc).date().isoformat(),
+                    "session_counts": sc,
+                    "game_counts":    gc,
+                }
+                with open(_SPORTS_STATE_FILE, "w") as _f:
+                    json.dump(state, _f)
+            except Exception as exc:
+                logger.warning(f"Could not save sports state: {exc}")
+
     # ------------------------------------------------------------------ #
     #  Heartbeat                                                           #
     # ------------------------------------------------------------------ #
@@ -1252,13 +1298,16 @@ class Trader:
                     p = self.portfolio
                     slot_cap = round(p.capital * SLOT_CAPITAL_PCT, 2)
                     bet_size = round(slot_cap * BET_PCT_OF_SLOT, 2)
-                logger.info(
-                    f"PORTFOLIO | total=${p.total:.2f} | "
-                    f"cash=${p.cash:.2f} ({p.cash/p.total*100:.1f}%) [locked] | "
-                    f"capital=${p.capital:.2f} ({p.capital/p.total*100:.1f}%) | "
-                    f"per-slot=${slot_cap:.2f} | per-trade=${bet_size:.2f} | "
-                    f"pnl=${p.daily_pnl:+.2f}"
-                )
+                if p.total > 0:
+                    logger.info(
+                        f"PORTFOLIO | total=${p.total:.2f} | "
+                        f"cash=${p.cash:.2f} ({p.cash/p.total*100:.1f}%) [locked] | "
+                        f"capital=${p.capital:.2f} ({p.capital/p.total*100:.1f}%) | "
+                        f"per-slot=${slot_cap:.2f} | per-trade=${bet_size:.2f} | "
+                        f"pnl=${p.daily_pnl:+.2f}"
+                    )
+                else:
+                    logger.warning("PORTFOLIO | total=$0.00 — portfolio fully depleted")
 
                 if NEWS_ENABLED:
                     t = threading.Thread(
@@ -1287,6 +1336,8 @@ class Trader:
                     with self._lock:
                         self._session_trade_counts = {k: 0 for k in SLOTS}
                         self._game_trade_counts    = {}
+                        self._ingame_trade_times   = {}
+                    self._save_sports_state()
                     logger.info("UTC midnight: sports session trade caps reset")
 
         except (KeyboardInterrupt, SystemExit):

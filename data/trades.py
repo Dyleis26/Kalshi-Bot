@@ -12,8 +12,8 @@ COLUMNS = [
     # Identity
     "trade_id",           # Unique ID for this trade
     "mode",               # 'paper' or 'live'
-    "asset",              # Slot key: 'BTC', 'WEATHER', 'MLB', 'NBA', 'NHL'
-    "slot_type",          # 'crypto', 'weather', 'sports'
+    "asset",              # Slot key: 'BTC', 'ETH', 'MLB', 'NBA', 'NHL'
+    "slot_type",          # 'crypto', 'sports'
     "market_label",       # Human label: 'BTC UP', 'MLB: Cubs to WIN', etc.
 
     # Entry
@@ -65,23 +65,19 @@ COLUMNS = [
 
     # Extended context — filled per slot type, null otherwise
     "kalshi_ticker",      # Exact Kalshi market ticker traded
-    "external_prob",      # Sports/Weather: model win probability (0.0–1.0)
-    "kalshi_yes_price",   # Sports/Weather: Kalshi YES price at decision time
-    "edge",               # Sports/Weather: external_prob - kalshi_yes_price
+    "external_prob",      # Sports: model win probability (0.0–1.0)
+    "kalshi_yes_price",   # Sports: Kalshi YES price at decision time
+    "edge",               # Sports: external_prob - kalshi_yes_price
     "is_ingame",          # Sports: 1 if live in-game trade, 0 if pre-game
     "game_score",         # Sports: score at trade time e.g. "2-3"
     "game_period",        # Sports: period/quarter/inning number
     "game_clock",         # Sports: clock remaining e.g. "6:24"
-    "nws_temp",           # Weather: NWS forecast high temp (°F)
-    "om_temp",            # Weather: Open-Meteo forecast high temp (°F)
-    "nws_prob",           # Weather: NWS-derived YES probability
-    "om_prob",            # Weather: Open-Meteo-derived YES probability
-    "bull_votes",         # BTC: number of bullish signals (0–6)
-    "bear_votes",         # BTC: number of bearish signals (0–6)
-    "funding_rate",       # BTC: perpetual funding rate at entry
-    "fng_value",          # BTC: Fear & Greed index value at entry (0–100)
-    "news_bias",          # BTC: news context bias ("bullish"/"bearish"/"neutral")
-    "news_score",         # BTC: net news score at entry
+    "bull_votes",         # Crypto: number of bullish signals (0–7)
+    "bear_votes",         # Crypto: number of bearish signals (0–7)
+    "funding_rate",       # Crypto: perpetual funding rate at entry
+    "fng_value",          # Crypto: Fear & Greed index value at entry (0–100)
+    "news_bias",          # Crypto: news context bias ("bullish"/"bearish"/"neutral")
+    "news_score",         # Crypto: net news score at entry
 
     # Sports team records and form (all populated at entry, null for non-sports slots)
     "home_record",        # Sports: home team season W-L (or W-L-OTL for NHL) e.g. "32-18-5"
@@ -131,7 +127,7 @@ class TradeLog:
             possible_payout:     max payout if win
             btc_price:           live price at entry (0 for non-crypto slots)
             signals:             signal snapshot (crypto) or edge dict (weather/sports)
-            asset:               slot key ('BTC', 'WEATHER', 'MLB', 'NBA', 'NHL')
+            asset:               slot key ('BTC', 'ETH', 'MLB', 'NBA', 'NHL')
             slot_type:           'crypto', 'weather', or 'sports'
             market_label:        human-readable label for Discord/CSV (e.g. 'MLB: Cubs to WIN')
         """
@@ -174,10 +170,6 @@ class TradeLog:
             "game_score":         signals.get("game_score"),
             "game_period":        signals.get("game_period"),
             "game_clock":         signals.get("game_clock"),
-            "nws_temp":           signals.get("nws_temp"),
-            "om_temp":            signals.get("om_temp"),
-            "nws_prob":           signals.get("nws_prob"),
-            "om_prob":            signals.get("om_prob"),
             "bull_votes":         signals.get("bull_votes"),
             "bear_votes":         signals.get("bear_votes"),
             "funding_rate":       signals.get("funding_rate"),

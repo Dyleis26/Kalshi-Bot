@@ -28,7 +28,7 @@ ASSETS = {
 
 # --- Live Trading Slots (5 market slots used by paper.py / live trader) ---
 # BTC: 15-min crypto Up/Down (Kraken WebSocket driven)
-# WEATHER/MLB/NBA/NHL: external-probability arbitrage (5-min poll driven)
+# MLB/NBA/NHL: external-probability arbitrage (5-min poll driven)
 #
 # NOTE: Kalshi series prefixes for sports/weather are guesses based on known
 # Kalshi conventions. Run `python -c "from administration.kalshi import KalshiClient;

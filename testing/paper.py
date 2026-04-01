@@ -680,6 +680,27 @@ class Trader:
                         logger.info(f"{slot_key}: re-entry blocked on {ticker} ({tag} cooloff)")
                         continue
 
+                # Opposite-side guard: Kalshi does not allow holding both YES and NO
+                # on the same market simultaneously. Block if an open trade already
+                # holds the opposite direction on this exact ticker.
+                _opp = False
+                try:
+                    with open(_OPEN_TRADES_FILE) as _ot_f:
+                        _open_now = json.load(_ot_f)
+                    for _td in _open_now.values():
+                        if (_td.get("kalshi_ticker") == ticker
+                                and _td.get("direction") != direction):
+                            _opp = True
+                            break
+                except Exception:
+                    pass
+                if _opp:
+                    logger.info(
+                        f"{slot_key} [{ticker}]: skipping — already hold "
+                        f"opposite side on this market"
+                    )
+                    continue
+
             no_ask         = float(market.get("no_ask_dollars", 0.5))
             contract_price = yes_ask if direction == LONG else no_ask
 

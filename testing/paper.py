@@ -1060,7 +1060,7 @@ class Trader:
         side           = "yes" if direction == LONG else "no"
         high_water     = contract_price
         trailing_armed = False
-        poll_interval  = 10
+        poll_interval  = 10 if slot_type == "crypto" else 30
         deadline       = time.monotonic() + seconds_until_settlement
 
         # Stop-loss threshold: 50% drop from entry (relative), capped at STOP_LOSS_PRICE.
@@ -1085,7 +1085,7 @@ class Trader:
             # Sports: check for early Kalshi resolution (close_time may be days away
             # but markets resolve within minutes of game end)
             if slot_type != "crypto" and kalshi_ticker:
-                early_result = self.kalshi.get_market_result(kalshi_ticker)
+                early_result = self.kalshi.get_market_result(kalshi_ticker, retries=1, delay=0)
                 if early_result is not None:
                     logger.info(
                         f"{slot_key}: early settlement — Kalshi resolved {kalshi_ticker} → {early_result.upper()}"

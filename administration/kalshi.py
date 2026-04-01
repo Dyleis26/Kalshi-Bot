@@ -115,7 +115,7 @@ class KalshiClient:
 
         game_date_filter=True  (sports): parse game date from ticker (e.g. KXNBAGAME-26MAR29...)
                                           and only return today's games with active pricing.
-        game_date_filter=False (weather): filter by close_time within max_close_hours.
+        game_date_filter=False: filter by close_time within max_close_hours.
 
         Returns a list of market dicts (may be empty).
         """

@@ -299,7 +299,7 @@ class Trader:
         with self._lock:
             df_1h_snap  = state["df_1h"].copy()
             df_15m_snap = state["df_15m"].copy()
-        decision = self.strategy.decide(df_1h_snap, df_15m_snap)
+        decision = self.strategy.decide(df_1h_snap, df_15m_snap, asset="BTC")
 
         direction = decision["direction"]
         self.monitor.record_signal(direction, decision["signals"])
@@ -310,7 +310,7 @@ class Trader:
 
         t = threading.Thread(
             target=self._execute_crypto_trade,
-            args=[direction, decision]
+            args=["BTC", direction, decision]
         )
         t.daemon = True
         t.start()
@@ -343,7 +343,7 @@ class Trader:
         with self._lock:
             df_1h_snap  = state["df_1h"].copy()
             df_15m_snap = state["df_15m"].copy()
-        decision = self.strategy.decide(df_1h_snap, df_15m_snap)
+        decision = self.strategy.decide(df_1h_snap, df_15m_snap, asset="ETH")
 
         direction = decision["direction"]
         self.monitor.record_signal(direction, decision["signals"])
@@ -353,44 +353,26 @@ class Trader:
             return
 
         t = threading.Thread(
-            target=self._execute_eth_trade,
-            args=[direction, decision]
+            target=self._execute_crypto_trade,
+            args=["ETH", direction, decision]
         )
         t.daemon = True
         t.start()
 
-    def _get_btc_ticker(self) -> str | None:
-        """Return the current Kalshi BTC ticker with 15-second TTL cache."""
-        now = time.monotonic()
-        cache = self._ticker_cache["BTC"]
-        if cache["ticker"] and (now - cache["ts"]) < 15:
-            return cache["ticker"]
-        m = self.kalshi.get_market_for_asset("BTC")
-        ticker = m.get("ticker") if m else None
-        self._ticker_cache["BTC"] = {"ticker": ticker, "ts": now}
-        return ticker
-
-    def _get_eth_ticker(self) -> str | None:
-        """Return the current Kalshi ETH ticker with 15-second TTL cache."""
-        now = time.monotonic()
-        cache = self._ticker_cache["ETH"]
-        if cache["ticker"] and (now - cache["ts"]) < 15:
-            return cache["ticker"]
-        m = self.kalshi.get_market_for_asset("ETH")
-        ticker = m.get("ticker") if m else None
-        self._ticker_cache["ETH"] = {"ticker": ticker, "ts": now}
-        return ticker
-
     def _get_ticker_for_slot(self, slot_key: str) -> str | None:
-        """Return the current Kalshi ticker for a crypto slot."""
-        if slot_key == "ETH":
-            return self._get_eth_ticker()
-        return self._get_btc_ticker()
+        """Return the current Kalshi ticker for a crypto slot (BTC or ETH) with 15s TTL cache."""
+        now = time.monotonic()
+        cache = self._ticker_cache[slot_key]
+        if cache["ticker"] and (now - cache["ts"]) < 15:
+            return cache["ticker"]
+        m = self.kalshi.get_market_for_asset(slot_key)
+        ticker = m.get("ticker") if m else None
+        self._ticker_cache[slot_key] = {"ticker": ticker, "ts": now}
+        return ticker
 
-    def _execute_crypto_trade(self, direction: str, decision: dict):
-        """Execute a BTC 15-minute Up/Down trade with full contrarian + near-fair logic."""
-        slot_key = "BTC"
-        # Extract and enrich signals with BTC decision metadata for trade storage
+    def _execute_crypto_trade(self, slot_key: str, direction: str, decision: dict):
+        """Execute a BTC or ETH 15-minute Up/Down trade with full contrarian + near-fair logic."""
+        # Extract and enrich signals with decision metadata for trade storage
         signals        = dict(decision["signals"])
         confidence     = decision["confidence"]
         confidence_pct = decision["confidence_pct"]
@@ -412,13 +394,13 @@ class Trader:
         with self._lock:
             last_key = self._last_trade_key[slot_key]
         if last_key == current_window:
-            logger.info(f"BTC: already traded this window ({current_window.strftime('%H:%M')}) — skipping")
+            logger.info(f"{slot_key}: already traded this window ({current_window.strftime('%H:%M')}) — skipping")
             self._release_trade_slot(slot_key)
             return
 
-        kalshi_ticker = self._get_btc_ticker()
+        kalshi_ticker = self._get_ticker_for_slot(slot_key)
         if not kalshi_ticker:
-            logger.info("BTC: no Kalshi market found — skipping trade")
+            logger.info(f"{slot_key}: no Kalshi market found — skipping trade")
             self._release_trade_slot(slot_key)
             return
 
@@ -428,7 +410,7 @@ class Trader:
         attempt      = 0
         yes_price, no_price = 1.0, 1.0
         while time.monotonic() - retry_start < WINDOW_SECS:
-            fresh_ticker = self._get_btc_ticker() or kalshi_ticker
+            fresh_ticker = self._get_ticker_for_slot(slot_key) or kalshi_ticker
             yes_price, no_price = self.kalshi.get_market_prices(fresh_ticker)
             if 0.05 <= yes_price <= 0.95:
                 kalshi_ticker = fresh_ticker
@@ -437,17 +419,17 @@ class Trader:
             remaining = WINDOW_SECS - (time.monotonic() - retry_start)
             if remaining < 30:
                 break
-            logger.info(f"BTC: Kalshi not priced (yes={yes_price:.2f}) — retrying in 30s (attempt {attempt})")
+            logger.info(f"{slot_key}: Kalshi not priced (yes={yes_price:.2f}) — retrying in 30s (attempt {attempt})")
             time.sleep(30)
 
         if not (0.05 <= yes_price <= 0.95):
-            logger.info("BTC: no real Kalshi price available — skipping trade")
+            logger.info(f"{slot_key}: no real Kalshi price available — skipping trade")
             self._release_trade_slot(slot_key)
             return
 
         if not (CONTRACT_PRICE_MIN <= yes_price <= CONTRACT_PRICE_MAX):
             logger.info(
-                f"BTC: market too confident (yes={yes_price:.2f}) — "
+                f"{slot_key}: market too confident (yes={yes_price:.2f}) — "
                 f"outside near-fair zone [{CONTRACT_PRICE_MIN:.2f}, {CONTRACT_PRICE_MAX:.2f}], skipping"
             )
             self._release_trade_slot(slot_key)
@@ -460,14 +442,14 @@ class Trader:
             price_above_vwap = signals["price"] > signals["vwap"]
             if direction == SHORT and not price_above_vwap:
                 logger.info(
-                    f"BTC: contrarian SHORT skipped — price below VWAP "
+                    f"{slot_key}: contrarian SHORT skipped — price below VWAP "
                     f"({signals['price']:.2f} < {signals['vwap']:.2f}), no mean-reversion setup"
                 )
                 self._release_trade_slot(slot_key)
                 return
             if direction == LONG and price_above_vwap:
                 logger.info(
-                    f"BTC: contrarian LONG skipped — price above VWAP "
+                    f"{slot_key}: contrarian LONG skipped — price above VWAP "
                     f"({signals['price']:.2f} > {signals['vwap']:.2f}), no mean-reversion setup"
                 )
                 self._release_trade_slot(slot_key)
@@ -479,14 +461,14 @@ class Trader:
             )
             if not rsi_agrees:
                 logger.info(
-                    f"BTC: contrarian {direction.upper()} skipped — "
+                    f"{slot_key}: contrarian {direction.upper()} skipped — "
                     f"RSI={signals['rsi']:.1f} ({signals['rsi_bias']}) opposes direction"
                 )
                 self._release_trade_slot(slot_key)
                 return
 
             logger.info(
-                f"BTC: contrarian — signal={direction} vs market yes={yes_price:.2f} "
+                f"{slot_key}: contrarian — signal={direction} vs market yes={yes_price:.2f} "
                 f"(buying {'YES at discount' if direction == LONG else 'NO at discount'})"
             )
 
@@ -495,14 +477,14 @@ class Trader:
         if signals.get("equity_change") is not None:
             equity_str = f" | equity={signals['equity_change']:+.2%}({signals['equity_bias']})"
         logger.info(
-            f"BTC: signal-context | rsi={signals['rsi']:.1f}({signals['rsi_bias']}) | "
+            f"{slot_key}: signal-context | rsi={signals['rsi']:.1f}({signals['rsi_bias']}) | "
             f"price {vwap_pos} vwap ({signals['price']:.2f} vs {signals['vwap']:.2f}){equity_str}"
         )
 
         side           = "yes" if direction == LONG else "no"
         contract_price = yes_price if direction == LONG else no_price
 
-        # Dynamic sizing: 25% of this slot's 10% capital allocation.
+        # Dynamic sizing: BET_PCT_OF_SLOT of this slot's SLOT_CAPITAL_PCT capital allocation.
         # Rebalances automatically after every trade since portfolio.capital is live.
         with self._lock:
             slot_capital = self.portfolio.capital * SLOT_CAPITAL_PCT
@@ -510,8 +492,8 @@ class Trader:
         size = round(slot_capital * BET_PCT_OF_SLOT, 2)
         if consec >= CONSEC_LOSS_THRESHOLD:
             size = round(size * CONSEC_LOSS_REDUCTION, 2)
-            logger.info(f"BTC: cooldown active ({consec} consecutive losses) — bet reduced to ${size:.2f}")
-        logger.debug(f"BTC: sizing — capital=${self.portfolio.capital:.2f} slot=${slot_capital:.2f} bet=${size:.2f}")
+            logger.info(f"{slot_key}: cooldown active ({consec} consecutive losses) — bet reduced to ${size:.2f}")
+        logger.debug(f"{slot_key}: sizing — capital=${self.portfolio.capital:.2f} slot=${slot_capital:.2f} bet=${size:.2f}")
 
         contracts = math.floor(size / contract_price)
         if contracts < 1:
@@ -519,155 +501,9 @@ class Trader:
             return
 
         side_label   = "UP" if direction == LONG else "DOWN"
-        market_label = f"BTC {side_label}"
+        market_label = f"{slot_key} {side_label}"
 
         # Compute settlement window before order placement (timing matters)
-        _now = datetime.now(timezone.utc)
-        _m   = _now.minute - (_now.minute % 15)
-        settlement_open = _now.replace(minute=_m, second=0, microsecond=0, tzinfo=None)
-
-        self._place_and_monitor(
-            slot_key=slot_key,
-            slot_type="crypto",
-            direction=direction,
-            signals=signals,
-            contracts=contracts,
-            contract_price=contract_price,
-            kalshi_ticker=kalshi_ticker,
-            market_label=market_label,
-            trade_key=current_window,
-            settlement_open=settlement_open,
-            bet_size=size,
-            confidence_pct=confidence_pct,
-        )
-
-    def _execute_eth_trade(self, direction: str, decision: dict):
-        """Execute an ETH 15-minute Up/Down trade — mirrors BTC logic."""
-        slot_key = "ETH"
-        signals        = dict(decision["signals"])
-        confidence_pct = decision["confidence_pct"]
-        signals.update({
-            "bull_votes":    decision.get("bull_votes"),
-            "bear_votes":    decision.get("bear_votes"),
-            "funding_rate":  decision.get("funding_rate"),
-            "fng_value":     decision.get("fng_value"),
-            "news_bias":     decision.get("news_bias"),
-            "news_score":    decision.get("news_score"),
-            "equity_bias":   decision.get("equity_bias"),
-            "equity_change": decision.get("equity_change"),
-        })
-
-        _now_cw = datetime.now(timezone.utc)
-        _cw_min = _now_cw.minute - (_now_cw.minute % 15)
-        current_window = _now_cw.replace(minute=_cw_min, second=0, microsecond=0, tzinfo=None)
-        with self._lock:
-            last_key = self._last_trade_key[slot_key]
-        if last_key == current_window:
-            logger.info(f"ETH: already traded this window ({current_window.strftime('%H:%M')}) — skipping")
-            self._release_trade_slot(slot_key)
-            return
-
-        kalshi_ticker = self._get_eth_ticker()
-        if not kalshi_ticker:
-            logger.info("ETH: no Kalshi market found — skipping trade")
-            self._release_trade_slot(slot_key)
-            return
-
-        retry_start = time.monotonic()
-        WINDOW_SECS = 14 * 60
-        attempt     = 0
-        yes_price, no_price = 1.0, 1.0
-        while time.monotonic() - retry_start < WINDOW_SECS:
-            fresh_ticker = self._get_eth_ticker() or kalshi_ticker
-            yes_price, no_price = self.kalshi.get_market_prices(fresh_ticker)
-            if 0.05 <= yes_price <= 0.95:
-                kalshi_ticker = fresh_ticker
-                break
-            attempt += 1
-            remaining = WINDOW_SECS - (time.monotonic() - retry_start)
-            if remaining < 30:
-                break
-            logger.info(f"ETH: Kalshi not priced (yes={yes_price:.2f}) — retrying in 30s (attempt {attempt})")
-            time.sleep(30)
-
-        if not (0.05 <= yes_price <= 0.95):
-            logger.info("ETH: no real Kalshi price available — skipping trade")
-            self._release_trade_slot(slot_key)
-            return
-
-        if not (CONTRACT_PRICE_MIN <= yes_price <= CONTRACT_PRICE_MAX):
-            logger.info(
-                f"ETH: market too confident (yes={yes_price:.2f}) — "
-                f"outside near-fair zone [{CONTRACT_PRICE_MIN:.2f}, {CONTRACT_PRICE_MAX:.2f}], skipping"
-            )
-            self._release_trade_slot(slot_key)
-            return
-
-        market_direction = LONG if yes_price >= 0.50 else SHORT
-        is_contrarian    = (market_direction != direction)
-
-        if is_contrarian:
-            price_above_vwap = signals["price"] > signals["vwap"]
-            if direction == SHORT and not price_above_vwap:
-                logger.info(
-                    f"ETH: contrarian SHORT skipped — price below VWAP "
-                    f"({signals['price']:.2f} < {signals['vwap']:.2f}), no mean-reversion setup"
-                )
-                self._release_trade_slot(slot_key)
-                return
-            if direction == LONG and price_above_vwap:
-                logger.info(
-                    f"ETH: contrarian LONG skipped — price above VWAP "
-                    f"({signals['price']:.2f} > {signals['vwap']:.2f}), no mean-reversion setup"
-                )
-                self._release_trade_slot(slot_key)
-                return
-
-            rsi_agrees = (
-                (direction == SHORT and signals["rsi_bias"] == "bear") or
-                (direction == LONG  and signals["rsi_bias"] == "bull")
-            )
-            if not rsi_agrees:
-                logger.info(
-                    f"ETH: contrarian {direction.upper()} skipped — "
-                    f"RSI={signals['rsi']:.1f} ({signals['rsi_bias']}) opposes direction"
-                )
-                self._release_trade_slot(slot_key)
-                return
-
-            logger.info(
-                f"ETH: contrarian — signal={direction} vs market yes={yes_price:.2f} "
-                f"(buying {'YES at discount' if direction == LONG else 'NO at discount'})"
-            )
-
-        vwap_pos   = "above" if signals["price"] > signals["vwap"] else "below"
-        equity_str = ""
-        if signals.get("equity_change") is not None:
-            equity_str = f" | equity={signals['equity_change']:+.2%}({signals['equity_bias']})"
-        logger.info(
-            f"ETH: signal-context | rsi={signals['rsi']:.1f}({signals['rsi_bias']}) | "
-            f"price {vwap_pos} vwap ({signals['price']:.2f} vs {signals['vwap']:.2f}){equity_str}"
-        )
-
-        side           = "yes" if direction == LONG else "no"
-        contract_price = yes_price if direction == LONG else no_price
-
-        with self._lock:
-            slot_capital = self.portfolio.capital * SLOT_CAPITAL_PCT
-            consec = self._consec_losses[slot_key]
-        size = round(slot_capital * BET_PCT_OF_SLOT, 2)
-        if consec >= CONSEC_LOSS_THRESHOLD:
-            size = round(size * CONSEC_LOSS_REDUCTION, 2)
-            logger.info(f"ETH: cooldown active ({consec} consecutive losses) — bet reduced to ${size:.2f}")
-
-        contracts = math.floor(size / contract_price)
-        if contracts < 1:
-            self._release_trade_slot(slot_key)
-            return
-
-        side_label   = "UP" if direction == LONG else "DOWN"
-        market_label = f"ETH {side_label}"
-
         _now = datetime.now(timezone.utc)
         _m   = _now.minute - (_now.minute % 15)
         settlement_open = _now.replace(minute=_m, second=0, microsecond=0, tzinfo=None)
@@ -1400,7 +1236,7 @@ class Trader:
                 time.sleep(10)
                 elapsed += 10
 
-                # Non-crypto slots: poll every MARKET_EVAL_INTERVAL_SECS (5 min)
+                # Non-crypto slots: poll every MARKET_EVAL_INTERVAL_SECS (2 min)
                 now = time.monotonic()
                 if now - self._last_market_poll >= MARKET_EVAL_INTERVAL_SECS:
                     self._last_market_poll = now

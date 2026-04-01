@@ -27,14 +27,17 @@ class Strategy:
     #  Entry Decision                                                      #
     # ------------------------------------------------------------------ #
 
-    def decide(self, df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
+    def decide(self, df_1h: pd.DataFrame, df_15m: pd.DataFrame, asset: str = "BTC") -> dict:
         """
         Evaluate all 4 signals and return a trade decision.
+
+        Args:
+            asset: "BTC" or "ETH" — used to fetch the correct funding rate symbol.
 
         Returns:
             {
                 "direction": 'long' | 'short' | 'none',
-                "confidence": int (0-4 signals agreeing),
+                "confidence": int (0-7 signals agreeing),
                 "signals": dict (full signal snapshot),
                 "reason": str
             }
@@ -49,8 +52,8 @@ class Strategy:
             signals["vwap_bias"],
         ]
 
-        # Funding rate: contrarian signal — crowded positioning reverses
-        funding_data = get_funding_rate("BTCUSDT")
+        # Funding rate: contrarian signal — crowded positioning reverses (per-asset)
+        funding_data = get_funding_rate(f"{asset}USDT")
         funding_b = (
             get_funding_bias(
                 funding_data["funding_rate"],
@@ -88,7 +91,7 @@ class Strategy:
         extra_tag = f" [fund={funding_b} fng={fng_b}({fng_data['value'] if fng_data else '?'}){eq_tag}]"
 
         if FORCE_TRADE:
-            # Majority vote across 6 signals; tiebreaker on 3-3
+            # Majority vote across 7 signals; tiebreaker when bull == bear
             if bull_count > bear_count:
                 direction = LONG
                 reason = f"Force/majority — bull={bull_count} bear={bear_count}{extra_tag}"

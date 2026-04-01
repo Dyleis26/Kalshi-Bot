@@ -52,12 +52,12 @@ class Portfolio:
         On a win: split profit 50% to cash, 50% to capital.
         Reset losing streak.
         """
-        to_cash = round(profit * PROFIT_TO_CASH, 2)
-        to_capital = round(profit - to_cash, 2)  # Avoid rounding drift from independent splits
+        to_cash    = round(profit * PROFIT_TO_CASH, 2)
+        to_capital = round(profit - to_cash, 2)  # Complement avoids rounding drift
 
-        self.cash += to_cash
-        self.capital += to_capital
-        self.daily_pnl += profit
+        self.cash    = round(self.cash    + to_cash,    2)
+        self.capital = round(self.capital + to_capital, 2)
+        self.daily_pnl = round(self.daily_pnl + profit, 4)
         self.losing_streak = 0
 
         self.trades.append({"result": "win", "amount": profit})
@@ -68,8 +68,8 @@ class Portfolio:
         On a loss: deduct from capital only. Cash is never touched.
         Increment losing streak. Check halt condition.
         """
-        self.capital = round(self.capital - abs(loss), 2)
-        self.daily_pnl -= abs(loss)
+        self.capital   = round(self.capital - abs(loss), 2)
+        self.daily_pnl = round(self.daily_pnl - abs(loss), 4)
         self.losing_streak += 1
 
         self.trades.append({"result": "loss", "amount": -abs(loss)})

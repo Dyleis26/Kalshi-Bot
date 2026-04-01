@@ -42,13 +42,6 @@ SLOTS = {
         "kraken_rest": "XBTUSD",
         "kraken_ws":   "BTC/USD",
     },
-    "ETH": {
-        "type":        "crypto",
-        "label":       "ETH",
-        "series":      "KXETH15M",
-        "kraken_rest": "ETHUSD",
-        "kraken_ws":   "ETH/USD",
-    },
     "MLB": {
         "type":             "sports",
         "label":            "MLB",
@@ -71,17 +64,18 @@ SLOTS = {
         "game_date_filter": True,
     },
 }
-NUM_SLOTS = len(SLOTS)  # 5 — one capital slot per market type
+NUM_SLOTS = len(SLOTS)  # 4 — BTC, MLB, NBA, NHL
 
 # --- Non-crypto slot settings ---
-MARKET_EVAL_INTERVAL_SECS = 120   # Poll sports slots every 2 minutes (faster in-game edge capture)
+MARKET_EVAL_INTERVAL_SECS  = 120   # Poll sports slots every 2 minutes (faster in-game edge capture)
 # Sports close_time is weeks away (settlement); game_date_filter (ticker date) is used instead.
 SPORTS_EDGE_MIN            = 0.20  # Need ≥20% edge over Kalshi YES price to enter
 SPORTS_CONTRACT_PRICE_MIN  = 0.20  # Broader range for in-game (pre-game uses 0.35)
 SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game favorites can be 0.80+ and still have edge
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
-SPORTS_SESSION_MAX         = 5     # Max trades per sports slot per day (resets at UTC midnight)
-SPORTS_MAX_TRADES_PER_GAME = 2     # Max trades on the same game matchup per day (prevents over-concentration)
+SPORTS_MAX_GAMES_PER_SLOT  = 5     # Max unique game matchups per sports slot per day
+SPORTS_MAX_TRADES_PER_GAME = 1     # One trade per game matchup — no re-entries ever
+SPORTS_DAILY_BUDGET_PCT    = 0.50  # Each sport slot spends up to 50% of its slot capital per day
 INGAME_STALE_MARKET_SECS   = 600   # Skip in-game market if Kalshi YES price unchanged >10 min
 MARKET_MAX_CLOSE_HOURS     = 36.0  # Sports markets: how far ahead to look for open markets
 
@@ -125,11 +119,17 @@ MAX_LOSING_STREAK = 999     # Data collection: disabled
 LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 
 # --- Bet Sizing (percentage-based, dynamic) ---
-# Each trade = BET_PCT_OF_SLOT × slot_capital
-#            = BET_PCT_OF_SLOT × (portfolio.capital × SLOT_CAPITAL_PCT)
+# BTC:    each trade = BET_PCT_OF_SLOT × slot_capital
+#                    = 0.50 × (portfolio.capital × 0.25)
+# Sports: daily budget = BET_PCT_OF_SLOT × slot_capital per sport slot
+#         per-game bet = daily_budget / min(N_tradeable_now, remaining_capacity)
+#         — fractions up when fewer good games available, spreads thin when many
 #
-# With $250 starting balance:
-#   capital = $125  →  slot_capital = $12.50  →  bet = $3.13
+# With $500 starting balance:
+#   capital = $250  →  slot_capital = $62.50  →  BTC max bet = $31.25
+#                                              →  Sports daily budget = $31.25
+#                                              →  Sports per-game (5 games) = $6.25
+#                                              →  Sports per-game (1 game)  = $31.25
 #
 # After every trade portfolio.capital updates automatically, so bet size
 # self-adjusts without any separate rebalance step:
@@ -137,8 +137,8 @@ LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 #   loss → capital shrinks → next bet slightly smaller
 #   cash is NEVER used for losses (record_loss touches capital only)
 #
-SLOT_CAPITAL_PCT = 0.10   # 10% of capital pool per slot (capital ÷ NUM_SLOTS)
-BET_PCT_OF_SLOT  = 0.50   # 50% of slot's capital allocation per trade
+SLOT_CAPITAL_PCT = 0.25   # 25% of capital pool per slot (4 slots)
+BET_PCT_OF_SLOT  = 0.50   # BTC: max 50% of slot capital per trade; Sports: 50% total daily budget
 
 # --- Kalshi Contract Price Filter (near-fair zone) ---
 # Only trade when YES is in this range — outside it the payout asymmetry makes

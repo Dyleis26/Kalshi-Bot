@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("odds")
 
-CACHE_TTL_SECS = 1800  # 30-minute cache — pre-game lines move slowly
+CACHE_TTL_SECS = 900   # 15-minute cache — lines can move significantly in the final hour pre-game
 
 _cache: dict = {}
 _opening_lines: dict = {}  # Persistent — never expires; stores first-seen home_win_pct per game

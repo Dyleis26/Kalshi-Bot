@@ -8,32 +8,46 @@ from administration.config import RSI_PERIOD
 #  RSI                                                                 #
 # ------------------------------------------------------------------ #
 
+def _rsi_series(df: pd.DataFrame, period: int = RSI_PERIOD) -> pd.Series:
+    """
+    Compute the RSI series on the 'close' column and return it.
+    Used internally so RSI level and RSI slope share one computation.
+    """
+    delta    = df["close"].diff()
+    gain     = delta.clip(lower=0)
+    loss     = -delta.clip(upper=0)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
+    rs       = avg_gain / avg_loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
+
 def rsi(df: pd.DataFrame, period: int = RSI_PERIOD) -> float:
     """
     Calculate RSI on the 'close' column.
-    Returns the latest RSI value.
+    Returns the latest RSI value (50.0 = neutral on insufficient data).
     """
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-
-    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
-    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
-
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi_series = 100 - (100 / (1 + rs))
-    val = float(rsi_series.iloc[-1])
-    return round(val if not np.isnan(val) else 50.0, 4)  # 50 = neutral on insufficient data
+    series = _rsi_series(df, period)
+    val    = float(series.iloc[-1])
+    return round(val if not np.isnan(val) else 50.0, 4)
 
 
-def rsi_bias(rsi_val: float) -> str:
+def rsi_slope(df: pd.DataFrame, period: int = RSI_PERIOD, lookback: int = 3) -> str:
     """
-    Returns 'bull', 'bear', or 'neutral' based on 1H RSI value.
-    Neutral = no trade zone.
+    Returns 'bull'/'bear'/'neutral' based on RSI direction of change over the last
+    `lookback` 1H bars. Eliminates the persistent-bias problem of level-based RSI:
+    a rising RSI = bull momentum; falling = bear momentum, regardless of absolute level.
+    Threshold: ±2 RSI points over 3 hours to count as directional.
     """
-    if rsi_val > cfg.RSI_BULL:
+    if len(df) < period + lookback:
+        return "neutral"
+    series   = _rsi_series(df, period)
+    rsi_now  = float(series.iloc[-1])
+    rsi_prev = float(series.iloc[-lookback])
+    slope    = rsi_now - rsi_prev
+    if slope > 2.0:
         return "bull"
-    elif rsi_val < cfg.RSI_BEAR:
+    elif slope < -2.0:
         return "bear"
     return "neutral"
 
@@ -111,12 +125,41 @@ def vwap(df: pd.DataFrame, window: int = 96) -> float:
 
 
 def vwap_bias(current_price: float, vwap_val: float) -> str:
-    """Returns 'bull'/'bear' only if price is ≥VWAP_MIN_PCT away from VWAP; else neutral."""
+    """
+    Mean-reversion signal: price above VWAP = overextended (bear), price below = undervalued (bull).
+    Flipped from trend-following to mean-reversion because 15-min binary windows
+    revert to the mean far more often than they extend in the same direction.
+    """
     pct_diff = (current_price - vwap_val) / vwap_val
     if pct_diff > cfg.VWAP_MIN_PCT:
-        return "bull"
+        return "bear"   # Overextended above VWAP — expect reversion down
     elif pct_diff < -cfg.VWAP_MIN_PCT:
+        return "bull"   # Overextended below VWAP — expect reversion up
+    return "neutral"
+
+
+# ------------------------------------------------------------------ #
+#  Bollinger Bands                                                     #
+# ------------------------------------------------------------------ #
+
+def bollinger(df: pd.DataFrame, period: int = 20, num_std: float = 2.0) -> str:
+    """
+    Bollinger Band mean-reversion signal on 15M closes (period=20 = 5 hours).
+    Price at/above upper band = overbought (bear); at/below lower band = oversold (bull).
+    Returns neutral when price is within the bands (most of the time).
+    """
+    if len(df) < period:
+        return "neutral"
+    closes = df["close"].tail(period)
+    ma  = closes.mean()
+    std = closes.std(ddof=0)   # Population std dev — standard Bollinger Bands convention
+    upper = ma + num_std * std
+    lower = ma - num_std * std
+    price = float(df["close"].iloc[-1])
+    if price >= upper:
         return "bear"
+    elif price <= lower:
+        return "bull"
     return "neutral"
 
 
@@ -126,7 +169,10 @@ def vwap_bias(current_price: float, vwap_val: float) -> str:
 
 def evaluate(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
     """
-    Run all 4 signals and return a full snapshot.
+    Run all 5 signals and return a full snapshot.
+
+    Computes the RSI series once and reuses it for both rsi_val (level) and
+    rsi_slope (direction) to avoid redundant EWM calculations.
 
     Returns:
         {
@@ -135,13 +181,31 @@ def evaluate(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
             "momentum":  float,
             "vwap":      float,
             "price":     float,
-            "rsi_bias":      'bull'|'bear'|'neutral',
+            "rsi_bias":      'bull'|'bear'|'neutral',  # RSI slope (not level)
             "macd_bias":     'bull'|'bear'|'neutral',
             "momentum_bias": 'bull'|'bear'|'neutral',
-            "vwap_bias":     'bull'|'bear'|'neutral',
+            "vwap_bias":     'bull'|'bear'|'neutral',  # mean-reversion
+            "bb_bias":       'bull'|'bear'|'neutral',  # Bollinger Bands
         }
     """
-    rsi_val  = rsi(df_1h)
+    # Compute RSI series once — shared by rsi_val (level) and rsi_slope (direction)
+    rsi_ser  = _rsi_series(df_1h)
+    rsi_raw  = float(rsi_ser.iloc[-1])
+    rsi_val  = round(rsi_raw if not np.isnan(rsi_raw) else 50.0, 4)
+
+    lookback = 3
+    if len(df_1h) >= RSI_PERIOD + lookback:
+        rsi_prev = float(rsi_ser.iloc[-lookback])
+        slope    = rsi_val - rsi_prev
+        if slope > 2.0:
+            rsi_b = "bull"
+        elif slope < -2.0:
+            rsi_b = "bear"
+        else:
+            rsi_b = "neutral"
+    else:
+        rsi_b = "neutral"
+
     macd_val = macd(df_1h)
     mom_val  = momentum(df_15m)
     vwap_val = vwap(df_15m)
@@ -154,8 +218,9 @@ def evaluate(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
         "momentum":      mom_val,
         "vwap":          vwap_val,
         "price":         price,
-        "rsi_bias":      rsi_bias(rsi_val),
+        "rsi_bias":      rsi_b,                      # Slope-based: unbiased across trend regimes
         "macd_bias":     macd_bias(macd_val, price_1h),
         "momentum_bias": momentum_bias(mom_val),
-        "vwap_bias":     vwap_bias(price, vwap_val),
+        "vwap_bias":     vwap_bias(price, vwap_val), # Mean-reversion: flipped from trend-following
+        "bb_bias":       bollinger(df_15m),          # Bollinger Band extremes: overbought/oversold
     }

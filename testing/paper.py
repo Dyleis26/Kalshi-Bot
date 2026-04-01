@@ -17,7 +17,8 @@ from administration.config import (
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
     MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS, SPORTS_INGAME_COOLOFF_MINS,
-    INGAME_STALE_MARKET_SECS, SPORTS_SESSION_MAX, SPORTS_MAX_TRADES_PER_GAME,
+    INGAME_STALE_MARKET_SECS, SPORTS_MAX_GAMES_PER_SLOT, SPORTS_MAX_TRADES_PER_GAME,
+    SPORTS_DAILY_BUDGET_PCT,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -32,19 +33,21 @@ logger = get_logger("paper")
 
 # Paths for persisting crypto trade windows and open positions across restarts
 _TRADE_STATE_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".btc_last_trade.json")
-_ETH_TRADE_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".eth_last_trade.json")
 _OPEN_TRADES_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".open_trades.json")
 _SPORTS_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".sports_state.json")
 
 
 class Trader:
     """
-    Live and paper trading across 5 market slots:
+    Live and paper trading across 4 market slots:
       - BTC:  15-min crypto Up/Down driven by Kraken WebSocket
-      - ETH:  15-min crypto Up/Down driven by Kraken WebSocket
       - MLB:  ESPN win probability vs Kalshi MLB market (2-min poll)
       - NBA:  ESPN win probability vs Kalshi NBA market (2-min poll)
       - NHL:  ESPN win probability vs Kalshi NHL market (2-min poll)
+
+    Sports capital model: each slot has a daily budget = SPORTS_DAILY_BUDGET_PCT × slot_capital.
+    Budget is spread across up to SPORTS_MAX_GAMES_PER_SLOT unique games; sizing fractions up
+    when fewer good games are found. One trade per game matchup (no re-entries).
 
     live=False → paper mode: simulates orders, uses Kalshi demo API
     live=True  → live mode: places real orders on Kalshi, syncs balance at startup
@@ -58,7 +61,7 @@ class Trader:
         self.trade_log = TradeLog(mode="live" if live else "paper")
         self.kalshi    = KalshiClient(paper=not live)
 
-        # Crypto-specific components (BTC + ETH)
+        # Crypto-specific components (BTC only)
         self.feed     = KrakenFeed()
         self.strategy = Strategy()
         self.btc_state = {
@@ -67,26 +70,31 @@ class Trader:
             "price":   0.0,
             "history": History("BTC", feed=self.feed),
         }
-        self.eth_state = {
-            "df_1h":   pd.DataFrame(),
-            "df_15m":  pd.DataFrame(),
-            "price":   0.0,
-            "history": History("ETH", feed=self.feed),
-        }
 
         # Non-crypto strategy instances
         self._sports_strategy = SportsStrategy()
 
+        # BTC signal evaluation lock — prevents concurrent strategy.decide() calls
+        # on the WebSocket thread (each decide() makes up to 3 blocking HTTP requests).
+        self._eval_lock = threading.Lock()
+
         # Per-slot rate limiting and state tracking
         self.trades_this_hour  = {k: 0 for k in SLOTS}
         self.hour_window_start = {k: time.monotonic() for k in SLOTS}
-        # Per-slot session trade cap (non-crypto only): resets on restart, prevents flooding
-        self._session_trade_counts: dict = {k: 0 for k in SLOTS}
 
-        # Kalshi ticker cache (15s TTL — used for BTC + ETH crypto slots)
+        # Sports budget tracking — resets at UTC midnight
+        _sports_slots = [k for k, v in SLOTS.items() if v["type"] == "sports"]
+        # Games bet per slot today (replaces old session_trade_counts)
+        self._sport_games_bet: dict = {k: 0 for k in _sports_slots}
+        # Dollars spent from each sport slot's daily budget today
+        self._sport_budget_spent: dict = {k: 0.0 for k in _sports_slots}
+        # Slot capital snapshot taken at day-start (budget baseline doesn't drift intra-day)
+        _initial_slot_cap = self.portfolio.capital * SLOT_CAPITAL_PCT
+        self._sport_budget_snap: dict = {k: _initial_slot_cap for k in _sports_slots}
+
+        # Kalshi ticker cache (15s TTL — BTC crypto slot)
         self._ticker_cache: dict = {
             "BTC": {"ticker": None, "ts": 0.0},
-            "ETH": {"ticker": None, "ts": 0.0},
         }
         # File lock for safe open-trades file writes from multiple threads
         self._file_lock = threading.Lock()
@@ -114,39 +122,29 @@ class Trader:
             pass
         except Exception as exc:
             logger.warning(f"Could not restore BTC trade state from disk: {exc}")
-        # Restore last ETH window
-        try:
-            with open(_ETH_TRADE_STATE_FILE) as _f:
-                _state = json.load(_f)
-                _iso = _state.get("ETH")
-                if _iso:
-                    _ts = datetime.fromisoformat(_iso)
-                    if (datetime.now(timezone.utc).replace(tzinfo=None) - _ts).total_seconds() < 900:
-                        self._last_trade_key["ETH"] = _ts
-                        logger.info(f"Restored last ETH window from disk: {_ts.strftime('%H:%M')}")
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            logger.warning(f"Could not restore ETH trade state from disk: {exc}")
         # Accumulates every ticker traded this session per slot
         self._traded_tickers: dict = {k: set() for k in SLOTS}
         # In-game re-entry cooloff: {game_key: last_entry_monotonic_time}
         self._ingame_trade_times: dict = {}
         # Per-game daily trade count: {game_key: count} — resets at UTC midnight
         self._game_trade_counts: dict = {}
-        # Restore sports session/game counts from disk (same UTC day only)
+        # Restore sports game counts and budget spend from disk (same UTC day only)
         # Prevents duplicate trades on the same game after a restart with open positions
         try:
             with open(_SPORTS_STATE_FILE) as _f:
                 _ss = json.load(_f)
             if _ss.get("date_utc") == datetime.now(timezone.utc).date().isoformat():
-                _sc = _ss.get("session_counts", {})
+                _gb = _ss.get("games_bet", {})
+                _bs = _ss.get("budget_spent", {})
                 _gc = _ss.get("game_counts", {})
-                for _k in SLOTS:
-                    if _k in _sc:
-                        self._session_trade_counts[_k] = int(_sc[_k])
+                for _k in _sports_slots:
+                    if _k in _gb:
+                        self._sport_games_bet[_k] = int(_gb[_k])
+                    if _k in _bs:
+                        self._sport_budget_spent[_k] = float(_bs[_k])
                 self._game_trade_counts = {k: int(v) for k, v in _gc.items()}
-                logger.info(f"Restored sports session counts from disk: {self._session_trade_counts}")
+                logger.info(f"Restored sports state from disk: games_bet={self._sport_games_bet} "
+                            f"budget_spent={self._sport_budget_spent}")
         except FileNotFoundError:
             pass
         except Exception as exc:
@@ -178,7 +176,7 @@ class Trader:
 
     def start(self):
         mode_str = "LIVE" if self.live else "paper"
-        logger.info(f"Trader starting [{mode_str}] (5 slots: BTC + ETH + MLB + NBA + NHL)...")
+        logger.info(f"Trader starting [{mode_str}] (4 slots: BTC + MLB + NBA + NHL)...")
         self.discord.start()
 
         if self.live:
@@ -197,12 +195,6 @@ class Trader:
         self.btc_state["df_1h"]  = data["1h"]
         self.btc_state["df_15m"] = data["15m"]
 
-        # Load ETH historical candles
-        logger.info("Loading history for ETH...")
-        eth_data = self.eth_state["history"].load_all()
-        self.eth_state["df_1h"]  = eth_data["1h"]
-        self.eth_state["df_15m"] = eth_data["15m"]
-
         self.monitor.set_connected("kraken",  True)
         self.monitor.set_connected("kalshi",  True)
         self.monitor.set_connected("discord", self.discord.is_ready())
@@ -218,13 +210,13 @@ class Trader:
             on_tick=self._on_tick,
         )
 
-        logger.info("Trader running. BTC/ETH driven by WebSocket; MLB/NBA/NHL polled every 2 min.")
+        logger.info("Trader running. BTC driven by WebSocket; MLB/NBA/NHL polled every 2 min.")
 
         self._resume_open_trades()
 
         if NEWS_ENABLED:
             t = threading.Thread(
-                target=NewsContext.fetch, args=[["BTC", "ETH"]], daemon=True
+                target=NewsContext.fetch, args=[["BTC"]], daemon=True
             )
             t.start()
 
@@ -240,18 +232,13 @@ class Trader:
         logger.info(f"Trader stopped: {reason}")
 
     # ------------------------------------------------------------------ #
-    #  WebSocket Handlers (BTC + ETH)                                    #
+    #  WebSocket Handlers (BTC)                                          #
     # ------------------------------------------------------------------ #
 
     def _on_15m_candle(self, asset: str, candle: dict):
-        if asset == "BTC":
-            state = self.btc_state
-            evaluate = self._evaluate_crypto
-        elif asset == "ETH":
-            state = self.eth_state
-            evaluate = self._evaluate_eth
-        else:
+        if asset != "BTC":
             return
+        state = self.btc_state
         with self._lock:
             row = pd.DataFrame([candle])[["time", "open", "high", "low", "close", "volume"]]
             candle_time = row["time"].iloc[0]
@@ -261,23 +248,33 @@ class Trader:
             else:
                 state["df_15m"] = pd.concat([df, row], ignore_index=True).tail(300)
         state["history"].append(candle, "15m")
-        evaluate()
+        # Run evaluation in a background thread so blocking HTTP requests inside
+        # strategy.decide() (funding rate, F&G, equity futures) don't stall the
+        # WebSocket callback and cause missed ticks or WS timeouts.
+        t = threading.Thread(target=self._evaluate_crypto_bg, daemon=True)
+        t.start()
+
+    def _evaluate_crypto_bg(self):
+        """Non-blocking wrapper for _evaluate_crypto: skips if evaluation already in progress."""
+        if not self._eval_lock.acquire(blocking=False):
+            return  # Previous candle's evaluation is still running — skip this one
+        try:
+            self._evaluate_crypto()
+        finally:
+            self._eval_lock.release()
 
     def _on_tick(self, asset: str, price: float):
         if asset == "BTC":
             with self._lock:
                 self.btc_state["price"] = price
-        elif asset == "ETH":
-            with self._lock:
-                self.eth_state["price"] = price
 
     # ------------------------------------------------------------------ #
-    #  Crypto Evaluation (BTC + ETH)                                      #
+    #  Crypto Evaluation (BTC)                                            #
     # ------------------------------------------------------------------ #
 
     def _get_crypto_state(self, slot_key: str) -> dict:
-        """Return the per-asset state dict for a crypto slot."""
-        return self.eth_state if slot_key == "ETH" else self.btc_state
+        """Return the per-asset state dict for a crypto slot (BTC only)."""
+        return self.btc_state
 
     def _evaluate_crypto(self):
         if time.monotonic() < self._ready_at:
@@ -333,52 +330,8 @@ class Trader:
         t.daemon = True
         t.start()
 
-    def _evaluate_eth(self):
-        """ETH 15-minute Up/Down evaluation — mirrors BTC logic."""
-        if time.monotonic() < self._ready_at:
-            return
-        if not FORCE_TRADE and not self.portfolio.can_trade():
-            return
-        if not self._within_trade_limit("ETH"):
-            return
-
-        state = self.eth_state
-        if len(state["df_1h"]) < 35 or len(state["df_15m"]) < 10:
-            return
-
-        try:
-            latest_candle_time = pd.to_datetime(
-                state["df_15m"]["time"].iloc[-1], format="mixed"
-            )
-            if latest_candle_time.tzinfo is None:
-                latest_candle_time = latest_candle_time.replace(tzinfo=timezone.utc)
-            age_minutes = (datetime.now(timezone.utc) - latest_candle_time).total_seconds() / 60
-            if age_minutes > 30:
-                return
-        except Exception:
-            return
-
-        with self._lock:
-            df_1h_snap  = state["df_1h"].copy()
-            df_15m_snap = state["df_15m"].copy()
-        decision = self.strategy.decide(df_1h_snap, df_15m_snap, asset="ETH")
-
-        direction = decision["direction"]
-        self.monitor.record_signal(direction, decision["signals"])
-
-        if direction == NONE:
-            logger.info(f"ETH: no trade — {decision['reason']}")
-            return
-
-        t = threading.Thread(
-            target=self._execute_crypto_trade,
-            args=["ETH", direction, decision]
-        )
-        t.daemon = True
-        t.start()
-
     def _get_ticker_for_slot(self, slot_key: str) -> str | None:
-        """Return the current Kalshi ticker for a crypto slot (BTC or ETH) with 15s TTL cache."""
+        """Return the current Kalshi ticker for the BTC crypto slot with 15s TTL cache."""
         now = time.monotonic()
         cache = self._ticker_cache[slot_key]
         if cache["ticker"] and (now - cache["ts"]) < 15:
@@ -389,7 +342,7 @@ class Trader:
         return ticker
 
     def _execute_crypto_trade(self, slot_key: str, direction: str, decision: dict):
-        """Execute a BTC or ETH 15-minute Up/Down trade with full contrarian + near-fair logic."""
+        """Execute a BTC 15-minute Up/Down trade with full contrarian + near-fair logic."""
         # Extract and enrich signals with decision metadata for trade storage
         signals        = dict(decision["signals"])
         confidence     = decision["confidence"]
@@ -473,14 +426,15 @@ class Trader:
                 self._release_trade_slot(slot_key)
                 return
 
-            rsi_agrees = (
-                (direction == SHORT and signals["rsi_bias"] == "bear") or
-                (direction == LONG  and signals["rsi_bias"] == "bull")
+            # Block only when RSI slope actively opposes the direction; neutral RSI passes.
+            rsi_opposes = (
+                (direction == SHORT and signals["rsi_bias"] == "bull") or
+                (direction == LONG  and signals["rsi_bias"] == "bear")
             )
-            if not rsi_agrees:
+            if rsi_opposes:
                 logger.info(
                     f"{slot_key}: contrarian {direction.upper()} skipped — "
-                    f"RSI={signals['rsi']:.1f} ({signals['rsi_bias']}) opposes direction"
+                    f"RSI slope ({signals['rsi_bias']}) actively opposes direction"
                 )
                 self._release_trade_slot(slot_key)
                 return
@@ -571,11 +525,22 @@ class Trader:
         """
         if time.monotonic() < self._ready_at:
             return
+
+        # Budget guard: check games bet cap and remaining daily budget
         with self._lock:
-            session_count = self._session_trade_counts[slot_key]
-        if session_count >= SPORTS_SESSION_MAX:
-            logger.info(f"{slot_key}: session cap reached ({session_count}/{SPORTS_SESSION_MAX}) — skipping slot")
+            games_bet_today  = self._sport_games_bet.get(slot_key, 0)
+            budget_spent     = self._sport_budget_spent.get(slot_key, 0.0)
+            budget_snap      = self._sport_budget_snap.get(slot_key, self.portfolio.capital * SLOT_CAPITAL_PCT)
+        daily_budget     = round(budget_snap * SPORTS_DAILY_BUDGET_PCT, 2)
+        budget_remaining = round(daily_budget - budget_spent, 2)
+
+        if games_bet_today >= SPORTS_MAX_GAMES_PER_SLOT:
+            logger.info(f"{slot_key}: game cap reached ({games_bet_today}/{SPORTS_MAX_GAMES_PER_SLOT}) — skipping slot")
             return
+        if budget_remaining < 1.00:
+            logger.info(f"{slot_key}: daily budget exhausted (${budget_spent:.2f}/${daily_budget:.2f}) — skipping slot")
+            return
+
         if not self._within_trade_limit(slot_key):
             return
         if not FORCE_TRADE and not self.portfolio.can_trade():
@@ -685,8 +650,9 @@ class Trader:
                 # holds the opposite direction on this exact ticker.
                 _opp = False
                 try:
-                    with open(_OPEN_TRADES_FILE) as _ot_f:
-                        _open_now = json.load(_ot_f)
+                    with self._file_lock:
+                        with open(_OPEN_TRADES_FILE) as _ot_f:
+                            _open_now = json.load(_ot_f)
                     for _td in _open_now.values():
                         if (_td.get("kalshi_ticker") == ticker
                                 and _td.get("direction") != direction):
@@ -711,21 +677,6 @@ class Trader:
                 )
                 continue
 
-            # Dynamic sizing: 50% of this slot's 10% capital allocation.
-            # Rebalances automatically — portfolio.capital is live after every trade.
-            with self._lock:
-                slot_capital = self.portfolio.capital * SLOT_CAPITAL_PCT
-                consec = self._consec_losses[slot_key]
-            size = round(slot_capital * BET_PCT_OF_SLOT, 2)
-            if consec >= CONSEC_LOSS_THRESHOLD:
-                size = round(size * CONSEC_LOSS_REDUCTION, 2)
-                logger.info(f"{slot_key}: cooldown active ({consec} consecutive losses) — bet reduced to ${size:.2f}")
-            logger.debug(f"{slot_key}: sizing — capital=${self.portfolio.capital:.2f} slot=${slot_capital:.2f} bet=${size:.2f}")
-
-            contracts = math.floor(size / contract_price)
-            if contracts < 1:
-                continue
-
             close_str = market.get("close_time") or market.get("expiration_time", "")
             settlement_open = None
             if close_str:
@@ -742,31 +693,46 @@ class Trader:
                 "direction":       direction,
                 "is_ingame":       is_ingame,
                 "contract_price":  contract_price,
-                "size":            size,
-                "contracts":       contracts,
                 "settlement_open": settlement_open,
                 "confidence":      decision.get("confidence", 0.0),
                 "market_label":    decision.get("market_label", slot_key),
             })
 
-        # --- Phase 2: sort by confidence descending, execute top candidate ---
+        # --- Phase 2: compute budget-based sizing, sort by confidence, execute top candidate ---
         candidates.sort(key=lambda c: c["confidence"], reverse=True)
+
+        # Budget-aware sizing: remaining budget / min(N_tradeable, remaining_capacity)
+        # Fractions up when fewer good games found; spreads across up to max_games.
+        n_tradeable       = len(candidates)
+        remaining_capacity = SPORTS_MAX_GAMES_PER_SLOT - games_bet_today
+        if n_tradeable > 0 and remaining_capacity > 0:
+            per_game_size = round(budget_remaining / min(n_tradeable, remaining_capacity), 2)
+        else:
+            per_game_size = 0.0
+
         traded = False
 
         for c in candidates:
+            contract_price = c["contract_price"]
+            size = per_game_size
+            contracts = math.floor(size / contract_price)
+            if contracts < 1:
+                logger.info(f"{slot_key} [{c['ticker']}]: sizing too small (${size:.2f} / ${contract_price:.2f}) — skipping")
+                continue
+
             # Slot already claimed via _within_trade_limit — don't release it
             self._place_and_monitor(
                 slot_key=slot_key,
                 slot_type=slot_type,
                 direction=c["direction"],
                 signals=c["decision"],
-                contracts=c["contracts"],
-                contract_price=c["contract_price"],
+                contracts=contracts,
+                contract_price=contract_price,
                 kalshi_ticker=c["ticker"],
                 market_label=c["market_label"],
                 trade_key=c["ticker"],
                 settlement_open=c["settlement_open"],
-                bet_size=c["size"],
+                bet_size=size,
                 confidence_pct=c["decision"].get("confidence_pct", 0.0),
             )
             traded = True
@@ -836,15 +802,19 @@ class Trader:
             self._last_trade_key[slot_key] = trade_key
             if slot_type != "crypto":
                 self._traded_tickers[slot_key].add(trade_key)
-                self._session_trade_counts[slot_key] += 1
-            if slot_key in ("BTC", "ETH"):
-                _tf = _TRADE_STATE_FILE if slot_key == "BTC" else _ETH_TRADE_STATE_FILE
+                self._sport_games_bet[slot_key] = self._sport_games_bet.get(slot_key, 0) + 1
+                # Record budget spend (actual cost, not including fees — fees come from capital)
+                _actual_cost = contracts * contract_price
+                self._sport_budget_spent[slot_key] = round(
+                    self._sport_budget_spent.get(slot_key, 0.0) + _actual_cost, 4
+                )
+            if slot_key == "BTC":
                 try:
-                    with open(_tf, "w") as _f:
-                        json.dump({slot_key: trade_key.isoformat()}, _f)
-                    logger.info(f"{slot_key}: trade state persisted ({trade_key.strftime('%H:%M')} window)")
+                    with open(_TRADE_STATE_FILE, "w") as _f:
+                        json.dump({"BTC": trade_key.isoformat()}, _f)
+                    logger.info(f"BTC: trade state persisted ({trade_key.strftime('%H:%M')} window)")
                 except Exception as exc:
-                    logger.warning(f"{slot_key}: could not persist trade state to disk: {exc}")
+                    logger.warning(f"BTC: could not persist trade state to disk: {exc}")
             # Record ingame trade time for cooloff + per-game count tracking
             if slot_type == "sports":
                 _gk = trade_key.rsplit('-', 1)[0] if trade_key.count('-') >= 2 else trade_key
@@ -946,7 +916,10 @@ class Trader:
         side           = "yes" if direction == LONG else "no"
         high_water     = contract_price
         trailing_armed = False
-        poll_interval  = 10 if slot_type == "crypto" else 30
+        # Crypto: 10s — need fast stop-loss / trailing-profit response.
+        # Sports: 120s — stop-loss and trailing are disabled; only checking for early Kalshi
+        #         settlement. 300+ API calls per game at 30s is wasteful; 2-min is sufficient.
+        poll_interval  = 10 if slot_type == "crypto" else 120
         deadline       = time.monotonic() + seconds_until_settlement
 
         # Stop-loss threshold: 50% drop from entry (relative), capped at STOP_LOSS_PRICE.
@@ -1254,8 +1227,8 @@ class Trader:
         For sports: the label is embedded in the trade log;
         we build a fallback here from the slot name and direction.
         """
-        if slot_key in ("BTC", "ETH"):
-            return f"{slot_key} {'UP' if direction == LONG else 'DOWN'}"
+        if slot_key == "BTC":
+            return f"BTC {'UP' if direction == LONG else 'DOWN'}"
         slot_label = SLOTS[slot_key]["label"]
         direction_word = "YES" if direction == LONG else "NO"
         return f"{slot_label}: {direction_word}"
@@ -1276,16 +1249,18 @@ class Trader:
             self.trades_this_hour[slot_key] = max(0, self.trades_this_hour[slot_key] - 1)
 
     def _save_sports_state(self):
-        """Persist sports session/game counts to disk (same-day restoration after restart)."""
+        """Persist sports game counts and budget spend to disk (same-day restoration after restart)."""
         with self._lock:
-            sc = dict(self._session_trade_counts)
+            gb = dict(self._sport_games_bet)
+            bs = dict(self._sport_budget_spent)
             gc = dict(self._game_trade_counts)
         with self._file_lock:
             try:
                 state = {
-                    "date_utc":       datetime.now(timezone.utc).date().isoformat(),
-                    "session_counts": sc,
-                    "game_counts":    gc,
+                    "date_utc":     datetime.now(timezone.utc).date().isoformat(),
+                    "games_bet":    gb,
+                    "budget_spent": bs,
+                    "game_counts":  gc,
                 }
                 with open(_SPORTS_STATE_FILE, "w") as _f:
                     json.dump(state, _f)
@@ -1317,32 +1292,31 @@ class Trader:
                 # Portfolio breakdown — logged every heartbeat so cash/capital are always visible
                 with self._lock:
                     p = self.portfolio
-                    slot_cap = round(p.capital * SLOT_CAPITAL_PCT, 2)
-                    bet_size = round(slot_cap * BET_PCT_OF_SLOT, 2)
+                    slot_cap     = round(p.capital * SLOT_CAPITAL_PCT, 2)
+                    btc_max_bet  = round(slot_cap * BET_PCT_OF_SLOT, 2)
+                    sport_budget = round(slot_cap * SPORTS_DAILY_BUDGET_PCT, 2)
                 if p.total > 0:
                     logger.info(
                         f"PORTFOLIO | total=${p.total:.2f} | "
                         f"cash=${p.cash:.2f} ({p.cash/p.total*100:.1f}%) [locked] | "
                         f"capital=${p.capital:.2f} ({p.capital/p.total*100:.1f}%) | "
-                        f"per-slot=${slot_cap:.2f} | per-trade=${bet_size:.2f} | "
-                        f"pnl=${p.daily_pnl:+.2f}"
+                        f"per-slot=${slot_cap:.2f} | BTC-max=${btc_max_bet:.2f} | "
+                        f"sports-budget=${sport_budget:.2f}/slot | pnl=${p.daily_pnl:+.2f}"
                     )
                 else:
                     logger.warning("PORTFOLIO | total=$0.00 — portfolio fully depleted")
 
                 if NEWS_ENABLED:
                     t = threading.Thread(
-                        target=NewsContext.fetch, args=[["BTC", "ETH"]], daemon=True
+                        target=NewsContext.fetch, args=[["BTC"]], daemon=True
                     )
                     t.start()
 
-                # Refresh 1H candles every 15 min (BTC + ETH)
+                # Refresh BTC 1H candles every 15 min
                 if now - self._last_1h_refresh >= 900:
                     fresh_btc_1h = self.btc_state["history"].load("1h")
-                    fresh_eth_1h = self.eth_state["history"].load("1h")
                     with self._lock:
                         self.btc_state["df_1h"] = fresh_btc_1h
-                        self.eth_state["df_1h"] = fresh_eth_1h
                     self._last_1h_refresh = now
 
                 if self._is_new_day():
@@ -1354,12 +1328,20 @@ class Trader:
                     self._last_session_reset_utc = _utc_today
                 elif _utc_today != self._last_session_reset_utc:
                     self._last_session_reset_utc = _utc_today
+                    # Re-snapshot slot capital for new day's budget baseline
+                    _new_snap = self.portfolio.capital * SLOT_CAPITAL_PCT
                     with self._lock:
-                        self._session_trade_counts = {k: 0 for k in SLOTS}
-                        self._game_trade_counts    = {}
-                        self._ingame_trade_times   = {}
+                        _sports_slots = [k for k, v in SLOTS.items() if v["type"] == "sports"]
+                        self._sport_games_bet    = {k: 0   for k in _sports_slots}
+                        self._sport_budget_spent = {k: 0.0 for k in _sports_slots}
+                        self._sport_budget_snap  = {k: _new_snap for k in _sports_slots}
+                        self._game_trade_counts  = {}
+                        self._ingame_trade_times = {}
                     self._save_sports_state()
-                    logger.info("UTC midnight: sports session trade caps reset")
+                    logger.info(
+                        f"UTC midnight: sports budgets reset — new snap=${_new_snap:.2f}/slot "
+                        f"(daily budget ${_new_snap * SPORTS_DAILY_BUDGET_PCT:.2f}/slot)"
+                    )
 
         except (KeyboardInterrupt, SystemExit):
             self.stop("Keyboard interrupt")

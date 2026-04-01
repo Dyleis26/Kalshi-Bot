@@ -137,14 +137,18 @@ def _parse_event(event: dict) -> Optional[dict]:
     period       = int(status_obj.get("period", 0))
     clock_str    = status_obj.get("displayClock", "")  # "5:15" or "0:00"
 
-    if "FINAL" in status_name or "POSTPONED" in status_name:
+    if "FINAL" in status_name or "POSTPONED" in status_name or "CANCELLED" in status_name:
         return None
 
-    if "SCHEDULED" in status_name:
-        status = "pre"
-    elif "IN_PROGRESS" in status_name or "HALFTIME" in status_name:
+    # Any live-game state maps to "in" — covers regulation, halftime, OT, end-of-period
+    _LIVE_STATES = ("IN_PROGRESS", "HALFTIME", "OVERTIME", "END_PERIOD", "END_GAME",
+                    "END_OF_PERIOD", "INTERMISSION")
+    if any(s in status_name for s in _LIVE_STATES):
         status = "in"
+    elif "SCHEDULED" in status_name:
+        status = "pre"
     else:
+        # Unknown state — treat as pre-game to avoid in-game model on stale/bad data
         status = "pre"
 
     # Scores (available for in-game)
@@ -405,7 +409,8 @@ def _mlb_half_innings_remaining(inning: int, short_detail: str) -> Optional[int]
         return None
 
     if inning >= 9:
-        # Extra innings: no guaranteed future innings — treat as 1 half-inning remaining
+        # Extra innings (no guaranteed future innings): only the current half matters.
+        # Top of extras → 2 half-innings left (home still bats); Bot → 1 (walk-off possible).
         return half
     remaining = (9 - inning) * 2 + half
     return max(remaining, 0)

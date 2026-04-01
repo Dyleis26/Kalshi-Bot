@@ -37,19 +37,20 @@ class Strategy:
         Returns:
             {
                 "direction": 'long' | 'short' | 'none',
-                "confidence": int (0-7 signals agreeing),
+                "confidence": int (0-8 signals agreeing),
                 "signals": dict (full signal snapshot),
                 "reason": str
             }
         """
         signals = evaluate(df_1h, df_15m)
 
-        # Core technical signals (4 votes)
+        # Core technical signals (5 votes)
         biases = [
-            signals["rsi_bias"],
-            signals["macd_bias"],
-            signals["momentum_bias"],
-            signals["vwap_bias"],
+            signals["rsi_bias"],      # RSI slope: rising = bull, falling = bear
+            signals["macd_bias"],     # MACD histogram direction
+            signals["momentum_bias"], # 15M price momentum
+            signals["vwap_bias"],     # Mean-reversion: above VWAP = bear, below = bull
+            signals["bb_bias"],       # Bollinger Bands: at upper = bear, at lower = bull
         ]
 
         # Funding rate: contrarian signal — crowded positioning reverses (per-asset)
@@ -79,7 +80,7 @@ class Strategy:
             if equity_data:
                 equity_b = equity_data["bias"]
 
-        # Add 3 extra votes (7 total); majority still determines direction
+        # Add 3 extra votes (8 total); majority still determines direction
         biases += [funding_b, fng_b, equity_b]
 
         num_votes  = len(biases)
@@ -92,7 +93,7 @@ class Strategy:
         extra_tag = f" [fund={funding_b} fng={fng_b}({fng_data['value'] if fng_data else '?'}){eq_tag}]"
 
         if FORCE_TRADE:
-            # Majority vote across 7 signals; tiebreaker when bull == bear
+            # Majority vote across 8 signals; tiebreaker when bull == bear
             if bull_count > bear_count:
                 direction = LONG
                 reason = f"Force/majority — bull={bull_count} bear={bear_count}{extra_tag}"

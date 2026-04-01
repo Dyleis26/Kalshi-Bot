@@ -4,6 +4,7 @@ import threading
 import requests
 import websocket
 import pandas as pd
+from datetime import datetime, timezone
 from administration.config import CANDLE_LIMIT, ASSETS
 from administration.logger import get as get_logger
 from administration.security import rate_limited_call
@@ -118,11 +119,13 @@ class KrakenFeed:
 
     def _on_open(self, ws):
         logger.info("Kraken WebSocket connected.")
-        all_symbols = [cfg["kraken_ws"] for cfg in ASSETS.values()]
+        # Only subscribe BTC — it's the only live-traded crypto asset.
+        # ETH/SOL/XRP/DOGE remain in ASSETS for backtesting only.
+        btc_symbol = [ASSETS["BTC"]["kraken_ws"]]
         # ONE ohlc interval per connection — 15M only. 1H refreshed via REST in heartbeat.
         subscriptions = [
-            {"method": "subscribe", "params": {"channel": "ohlc",   "symbol": all_symbols, "interval": 15}},
-            {"method": "subscribe", "params": {"channel": "ticker",  "symbol": all_symbols}},
+            {"method": "subscribe", "params": {"channel": "ohlc",   "symbol": btc_symbol, "interval": 15}},
+            {"method": "subscribe", "params": {"channel": "ticker",  "symbol": btc_symbol}},
         ]
         for sub in subscriptions:
             ws.send(json.dumps(sub))
@@ -150,15 +153,15 @@ class KrakenFeed:
 
     def _backfill_missed_candles(self):
         """
-        On reconnect, fetch the last 5 closed 15M candles via REST for each asset
+        On reconnect, fetch the last 5 closed 15M candles via REST for BTC
         and fire _on_15m for any candle newer than what we last saw on the WS.
         Prevents missed signals when the WS drops for up to ~75 minutes.
         """
         if not self._on_15m:
             return
-        from datetime import datetime as _dt
-        now_utc = pd.Timestamp(_dt.utcnow())  # tz-naive UTC, matches Kraken REST candle times
-        for asset in ASSETS:
+        # tz-naive UTC to match Kraken REST candle timestamps
+        now_utc = pd.Timestamp(datetime.now(timezone.utc).replace(tzinfo=None))
+        for asset in ["BTC"]:   # Only backfill live-traded asset
             try:
                 df = self.get_candles("15m", asset=asset, limit=5)
                 if df.empty:

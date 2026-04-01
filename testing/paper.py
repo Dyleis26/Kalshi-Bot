@@ -17,7 +17,7 @@ from administration.config import (
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
     MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS, SPORTS_INGAME_COOLOFF_MINS,
-    INGAME_STALE_MARKET_SECS, SPORTS_SESSION_MAX,
+    INGAME_STALE_MARKET_SECS, SPORTS_SESSION_MAX, SPORTS_MAX_TRADES_PER_GAME,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -129,8 +129,10 @@ class Trader:
             logger.warning(f"Could not restore ETH trade state from disk: {exc}")
         # Accumulates every ticker traded this session per slot
         self._traded_tickers: dict = {k: set() for k in SLOTS}
-        # In-game re-entry cooloff: {ticker: last_entry_monotonic_time}
+        # In-game re-entry cooloff: {game_key: last_entry_monotonic_time}
         self._ingame_trade_times: dict = {}
+        # Per-game daily trade count: {game_key: count} — resets at UTC midnight
+        self._game_trade_counts: dict = {}
 
         # Correlated-sweep protection
         self._consec_losses:        dict = {k: 0 for k in SLOTS}
@@ -742,15 +744,6 @@ class Trader:
 
         slot_type = slot_cfg["type"]
 
-        # One trade per weather slot per session
-        if slot_type == "weather":
-            with self._lock:
-                already_traded = bool(self._traded_tickers[slot_key])
-            if already_traded:
-                logger.info(f"{slot_key}: already traded this session — skipping slot")
-                self._release_trade_slot(slot_key)
-                return
-
         # --- Phase 1: evaluate ALL markets, collect valid candidates ---
         candidates = []
         now_mono = time.monotonic()
@@ -773,22 +766,8 @@ class Trader:
             else:
                 self._market_price_seen[ticker] = {"price": yes_ask, "last_changed": now_mono}
 
-            # Pre-entry re-entry guard for weather (one trade per market per session)
-            if slot_type != "sports":
-                with self._lock:
-                    if ticker in self._traded_tickers[slot_key]:
-                        logger.info(f"{slot_key}: already traded market {ticker} — skipping")
-                        continue
-
             # Get signal from external source
-            if slot_type == "weather":
-                decision = self._weather_strategy.decide(
-                    market=market,
-                    lat=slot_cfg["lat"],
-                    lng=slot_cfg["lng"],
-                    city=slot_cfg.get("city", ""),
-                )
-            elif slot_type == "sports":
+            if slot_type == "sports":
                 decision = self._sports_strategy.decide(
                     market=market,
                     espn_sport=slot_cfg["espn_sport"],
@@ -820,8 +799,19 @@ class Trader:
                 # Game-level key prevents duplicate trades on both team markets
                 # (e.g. BOSATL-BOS and BOSATL-ATL map to BOSATL)
                 game_key = ticker.rsplit('-', 1)[0] if ticker.count('-') >= 2 else ticker
-                cooloff_secs = SPORTS_INGAME_COOLOFF_MINS * 60 if is_ingame else 86400
+
                 with self._lock:
+                    # Per-game daily cap: don't over-concentrate on one matchup
+                    game_count = self._game_trade_counts.get(game_key, 0)
+                    if game_count >= SPORTS_MAX_TRADES_PER_GAME:
+                        logger.info(
+                            f"{slot_key}: game cap reached on {game_key} "
+                            f"({game_count}/{SPORTS_MAX_TRADES_PER_GAME}) — skipping"
+                        )
+                        continue
+
+                    # In-game cooloff: min N minutes between re-entries on same live game
+                    cooloff_secs = SPORTS_INGAME_COOLOFF_MINS * 60 if is_ingame else 86400
                     last_t = self._ingame_trade_times.get(game_key, 0)
                     since  = now_mono - last_t
                     if since < cooloff_secs:
@@ -973,10 +963,11 @@ class Trader:
                     logger.info(f"{slot_key}: trade state persisted ({trade_key.strftime('%H:%M')} window)")
                 except Exception as exc:
                     logger.warning(f"{slot_key}: could not persist trade state to disk: {exc}")
-            # Record ingame trade time for cooloff tracking (game-level key)
+            # Record ingame trade time for cooloff + per-game count tracking
             if slot_type == "sports":
                 _gk = trade_key.rsplit('-', 1)[0] if trade_key.count('-') >= 2 else trade_key
                 self._ingame_trade_times[_gk] = time.monotonic()
+                self._game_trade_counts[_gk] = self._game_trade_counts.get(_gk, 0) + 1
 
         slot_cfg = SLOTS[slot_key]
         trade_id = self.trade_log.open_trade(
@@ -1459,6 +1450,7 @@ class Trader:
                     self._last_session_reset_utc = _utc_today
                     with self._lock:
                         self._session_trade_counts = {k: 0 for k in SLOTS}
+                        self._game_trade_counts    = {}
                     logger.info("UTC midnight: sports session trade caps reset")
 
         except (KeyboardInterrupt, SystemExit):

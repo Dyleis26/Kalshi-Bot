@@ -80,7 +80,8 @@ SPORTS_EDGE_MIN            = 0.20  # Need ≥20% edge over Kalshi YES price to e
 SPORTS_CONTRACT_PRICE_MIN  = 0.20  # Broader range for in-game (pre-game uses 0.35)
 SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game favorites can be 0.80+ and still have edge
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
-SPORTS_SESSION_MAX         = 3     # Max trades per sports slot per bot session (prevents flooding on restarts)
+SPORTS_SESSION_MAX         = 5     # Max trades per sports slot per day (resets at UTC midnight)
+SPORTS_MAX_TRADES_PER_GAME = 2     # Max trades on the same game matchup per day (prevents over-concentration)
 INGAME_STALE_MARKET_SECS   = 600   # Skip in-game market if Kalshi YES price unchanged >10 min
 MARKET_MAX_CLOSE_HOURS     = 36.0  # Sports markets: how far ahead to look for open markets
 

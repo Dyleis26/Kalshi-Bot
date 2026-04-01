@@ -42,13 +42,12 @@ SLOTS = {
         "kraken_rest": "XBTUSD",
         "kraken_ws":   "BTC/USD",
     },
-    "WEATHER": {
-        "type":       "weather",
-        "label":      "Weather",
-        "series":     "KXHIGHNY",     # Kalshi NYC daily high-temperature series
-        "city":       "New York City",
-        "lat":        40.7128,
-        "lng":        -74.0060,
+    "ETH": {
+        "type":        "crypto",
+        "label":       "ETH",
+        "series":      "KXETH15M",
+        "kraken_rest": "ETHUSD",
+        "kraken_ws":   "ETH/USD",
     },
     "MLB": {
         "type":             "sports",
@@ -75,17 +74,15 @@ SLOTS = {
 NUM_SLOTS = len(SLOTS)  # 5 — one capital slot per market type
 
 # --- Non-crypto slot settings ---
-MARKET_EVAL_INTERVAL_SECS = 120   # Poll weather/sports slots every 2 minutes (faster in-game edge capture)
-# Weather close_time is ~30h away (next-day markets); sports close_time is weeks away (settlement).
-# Sports slots use game_date_filter (ticker date) instead — this value only matters for weather.
+MARKET_EVAL_INTERVAL_SECS = 120   # Poll sports slots every 2 minutes (faster in-game edge capture)
+# Sports close_time is weeks away (settlement); game_date_filter (ticker date) is used instead.
 SPORTS_EDGE_MIN            = 0.20  # Need ≥20% edge over Kalshi YES price to enter
 SPORTS_CONTRACT_PRICE_MIN  = 0.20  # Broader range for in-game (pre-game uses 0.35)
 SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game favorites can be 0.80+ and still have edge
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
-SPORTS_SESSION_MAX         = 3     # Max trades per sports/weather slot per bot session (prevents flooding on restarts)
+SPORTS_SESSION_MAX         = 3     # Max trades per sports slot per bot session (prevents flooding on restarts)
 INGAME_STALE_MARKET_SECS   = 600   # Skip in-game market if Kalshi YES price unchanged >10 min
-WEATHER_EDGE_MIN           = 0.10  # Need ≥10% edge over Kalshi YES price to enter
-MARKET_MAX_CLOSE_HOURS     = 36.0  # Weather markets close ~30h away (next-day forecast)
+MARKET_MAX_CLOSE_HOURS     = 36.0  # Sports markets: how far ahead to look for open markets
 
 # --- Market ---
 INTERVALS = {

@@ -1,8 +1,8 @@
 """
-funding.py — Perpetual futures funding rate fetcher (Bybit primary, OKX fallback).
+funding.py — Perpetual futures funding rate fetcher (Bybit → OKX → Binance fallback chain).
 
-Binance blocks certain VPS IPs with HTTP 451. Bybit and OKX both offer the same
-funding rate data on public endpoints with no authentication required.
+All three exchanges offer funding rate data on public endpoints with no authentication required.
+Bybit returns HTTP 403 on some VPS IPs; OKX and Binance are tried as fallbacks.
 
 Returns the current 8-hour funding rate as a contrarian signal:
 
@@ -34,12 +34,14 @@ logger = logging.getLogger("funding")
 CACHE_TTL_SECS = 300   # 5-minute TTL — funding rate is stable between cycles
 _cache: dict = {}
 
-BYBIT_URL = "https://api.bybit.com/v5/market/tickers"
-OKX_URL   = "https://www.okx.com/api/v5/public/funding-rate"
+BYBIT_URL   = "https://api.bybit.com/v5/market/tickers"
+OKX_URL     = "https://www.okx.com/api/v5/public/funding-rate"
+BINANCE_URL = "https://fapi.binance.com/fapi/v1/fundingRate"
 
 # Symbol mapping: internal (Binance-style) → exchange-specific
-_BYBIT_SYMBOL = {"BTCUSDT": "BTCUSDT", "ETHUSDT": "ETHUSDT"}
-_OKX_SYMBOL   = {"BTCUSDT": "BTC-USD-SWAP", "ETHUSDT": "ETH-USD-SWAP"}
+_BYBIT_SYMBOL   = {"BTCUSDT": "BTCUSDT",      "ETHUSDT": "ETHUSDT"}
+_OKX_SYMBOL     = {"BTCUSDT": "BTC-USDT-SWAP", "ETHUSDT": "ETH-USDT-SWAP"}
+_BINANCE_SYMBOL = {"BTCUSDT": "BTCUSDT",      "ETHUSDT": "ETHUSDT"}
 
 
 def _fetch_bybit(symbol: str) -> float | None:
@@ -80,9 +82,31 @@ def _fetch_okx(symbol: str) -> float | None:
         items = data.get("data", [])
         if not items:
             return None
-        return float(items[0].get("fundingRate", 0))
+        rate = float(items[0].get("fundingRate", 0))
+        return rate if rate != 0.0 else None  # 0.0 often means no data, not a real rate
     except Exception as e:
         logger.warning(f"OKX funding rate error ({symbol}): {e}")
+        return None
+
+
+def _fetch_binance(symbol: str) -> float | None:
+    """Fetch most recent funding rate from Binance. Returns float or None on error."""
+    binance_sym = _BINANCE_SYMBOL.get(symbol, symbol)
+    try:
+        resp = requests.get(
+            BINANCE_URL,
+            params={"symbol": binance_sym, "limit": 1},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"Binance funding rate HTTP {resp.status_code}")
+            return None
+        data = resp.json()
+        if not data:
+            return None
+        return float(data[0].get("fundingRate", 0))
+    except Exception as e:
+        logger.warning(f"Binance funding rate error ({symbol}): {e}")
         return None
 
 
@@ -95,7 +119,7 @@ def get_funding_rate(symbol: str = "BTCUSDT") -> dict | None:
         {
           "symbol":       str,   # e.g. "BTCUSDT"
           "funding_rate": float, # positive → longs paying (market net long)
-          "source":       str,   # "bybit" or "okx"
+          "source":       str,   # "bybit", "okx", or "binance"
           "fetched_at":   str,
         }
     Returns None on any error.
@@ -110,6 +134,10 @@ def get_funding_rate(symbol: str = "BTCUSDT") -> dict | None:
     if rate is None:
         rate = _fetch_okx(symbol)
         source = "okx"
+
+    if rate is None:
+        rate = _fetch_binance(symbol)
+        source = "binance"
 
     if rate is None:
         return None

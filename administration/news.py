@@ -28,6 +28,11 @@ logger = logging.getLogger("news")
 
 _CONTEXT_PATH = Path(__file__).parent.parent / "data" / "news_context.json"
 
+# CryptoPanic rate limiting — free tier has a small monthly quota (~100 req).
+# Fetch at most once every 4 hours = ~6/day = ~180/month, well within limits.
+CRYPTOPANIC_FETCH_INTERVAL_SECS = 14400   # 4 hours
+_last_cryptopanic_fetch_ts: float = 0.0
+
 # Keywords that push sentiment bullish (+1 each)
 _BULLISH_KEYWORDS = [
     "rally", "surge", "soar", "jump", "rise", "bullish", "adoption",
@@ -73,7 +78,11 @@ class NewsContext:
         # ------------------------------------------------------------------ #
         #  CryptoPanic — crypto-specific news + community vote scores         #
         # ------------------------------------------------------------------ #
-        if CRYPTOPANIC_API_KEY:
+        global _last_cryptopanic_fetch_ts
+        _now_ts = datetime.now(timezone.utc).timestamp()
+        _cp_due = (_now_ts - _last_cryptopanic_fetch_ts) >= CRYPTOPANIC_FETCH_INTERVAL_SECS
+
+        if CRYPTOPANIC_API_KEY and _cp_due:
             try:
                 currencies = ",".join(assets)
                 url = (
@@ -103,11 +112,15 @@ class NewsContext:
                         if post.get("title"):
                             headlines.append(post["title"])
                     sources_used.append("cryptopanic")
+                    _last_cryptopanic_fetch_ts = _now_ts
                     logger.info(f"CryptoPanic: {len(all_posts)} posts received, {passed} within age window")
                 else:
                     logger.warning(f"CryptoPanic HTTP {resp.status_code}: {resp.text[:200]}")
             except Exception as e:
                 logger.warning(f"CryptoPanic fetch failed: {e}")
+        elif CRYPTOPANIC_API_KEY and not _cp_due:
+            mins_until = int((CRYPTOPANIC_FETCH_INTERVAL_SECS - (_now_ts - _last_cryptopanic_fetch_ts)) / 60)
+            logger.debug(f"CryptoPanic: skipping fetch — next in ~{mins_until}m")
 
         # ------------------------------------------------------------------ #
         #  NewsAPI — broad macro + political news                             #

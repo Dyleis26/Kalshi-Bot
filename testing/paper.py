@@ -137,11 +137,14 @@ class Trader:
                 _gb = _ss.get("games_bet", {})
                 _bs = _ss.get("budget_spent", {})
                 _gc = _ss.get("game_counts", {})
+                _bsnap = _ss.get("budget_snap", {})
                 for _k in _sports_slots:
                     if _k in _gb:
                         self._sport_games_bet[_k] = int(_gb[_k])
                     if _k in _bs:
                         self._sport_budget_spent[_k] = float(_bs[_k])
+                    if _k in _bsnap:
+                        self._sport_budget_snap[_k] = float(_bsnap[_k])
                 self._game_trade_counts = {k: int(v) for k, v in _gc.items()}
                 logger.info(f"Restored sports state from disk: games_bet={self._sport_games_bet} "
                             f"budget_spent={self._sport_budget_spent}")
@@ -1261,6 +1264,7 @@ class Trader:
                     "games_bet":    gb,
                     "budget_spent": bs,
                     "game_counts":  gc,
+                    "budget_snap":  dict(self._sport_budget_snap),
                 }
                 with open(_SPORTS_STATE_FILE, "w") as _f:
                     json.dump(state, _f)

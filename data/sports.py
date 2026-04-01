@@ -401,10 +401,10 @@ def _mlb_half_innings_remaining(inning: int, short_detail: str) -> Optional[int]
     Extra innings (inning > 9): only the current half-inning remains (sudden death).
     """
     detail = short_detail.lower()
-    if "top" in detail or "mid" in detail:
+    if "top" in detail:
         half = 2   # home still has bottom of this inning
-    elif "bot" in detail or "end" in detail:
-        half = 1   # only future innings remain (this half is in progress / done)
+    elif "bot" in detail or "mid" in detail or "end" in detail:
+        half = 1   # only future innings remain (this half is in progress / about to start)
     else:
         return None
 

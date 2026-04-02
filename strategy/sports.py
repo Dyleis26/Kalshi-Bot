@@ -88,6 +88,18 @@ class SportsStrategy:
             status_tag = "in-game" if is_live else "pre-game"
             return _no_trade(f"market too confident ({status_tag} YES={yes_ask:.2f})", yes_ask, sport_label, title)
 
+        # Early-game 0-0 filter: when no score exists the Gaussian model returns p=0.50,
+        # making any "edge" pure pre-game Kalshi mispricing — not live information.
+        # Skip the first half of the game when tied 0-0.
+        if is_live and game.get("score_home", 0) == 0 and game.get("score_away", 0) == 0:
+            _total_periods = {"baseball/mlb": 9, "basketball/nba": 4, "hockey/nhl": 3}
+            _tp = _total_periods.get(espn_sport, 4)
+            if game.get("period", 1) <= _tp // 2:
+                return _no_trade(
+                    f"tied 0-0 in period {game.get('period',1)} — no live score edge yet",
+                    yes_ask, sport_label, title,
+                )
+
         # Win probability source (in priority order):
         #   In-game MLB   → MLB Stats API base-out state model (most accurate)
         #   In-game NBA   → Gaussian model + play-by-play momentum adjustment

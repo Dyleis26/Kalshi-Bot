@@ -75,7 +75,7 @@ SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game favorites can be 0.80+ and still ha
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
 SPORTS_MAX_GAMES_PER_SLOT  = 5     # Max unique game matchups per sports slot per day
 SPORTS_MAX_TRADES_PER_GAME = 1     # One trade per game matchup — no re-entries ever
-SPORTS_DAILY_BUDGET_PCT    = 0.50  # Each sport slot spends up to 50% of its slot capital per day
+SPORTS_DAILY_BUDGET_PCT    = 0.75  # Each sport slot spends up to 75% of its slot capital per day
 INGAME_STALE_MARKET_SECS   = 600   # Skip in-game market if Kalshi YES price unchanged >10 min
 MARKET_MAX_CLOSE_HOURS     = 36.0  # Sports markets: how far ahead to look for open markets
 
@@ -142,7 +142,7 @@ BET_PCT_OF_SLOT  = 0.50   # BTC: max 50% of slot capital per trade; Sports: 50% 
 # Only trade when YES is in this range — outside it the payout asymmetry makes
 # positive EV mathematically impossible even with accurate signals.
 # YES=0.65 requires 68%+ accuracy to break even; YES=0.50 requires only ~52%.
-CONTRACT_PRICE_MIN = 0.35
+CONTRACT_PRICE_MIN = 0.52
 CONTRACT_PRICE_MAX = 0.65
 CONTRACT_BUY_MIN   = 0.05  # Hard floor on actual purchase price — blocks near-zero contracts
 CONTRACT_BUY_MAX   = 0.95  # Hard cap on actual purchase price — blocks illiquid NO asks (e.g. no_ask=0.98)

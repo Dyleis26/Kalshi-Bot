@@ -361,8 +361,32 @@ class Trader:
             "equity_change": decision.get("equity_change"),
         })
 
-        # One-trade-per-window: block duplicate entries in the same 15M window
+        # 07:00 UTC blackout: European cash open floods volume and invalidates overnight signals.
+        # Data shows 0% win rate and -$42.70 PnL in this hour across all sessions.
         _now_cw = datetime.now(timezone.utc)
+        if _now_cw.hour == 7:
+            logger.info(f"{slot_key}: skipped — 07:00 UTC blackout (European open volatility)")
+            self._release_trade_slot(slot_key)
+            return
+
+        # BTC crash regime filter: if BTC has dropped >3% over the last 6 hours, signals built
+        # on pre-crash data are unreliable. All-time record: <$67k regime 42% WR, -$96 PnL.
+        try:
+            _df1h = self.btc_state.get("df_1h")
+            if _df1h is not None and len(_df1h) >= 7:
+                _close_now  = float(_df1h["close"].iloc[-1])
+                _close_6h   = float(_df1h["close"].iloc[-7])
+                _pct_change = (_close_now - _close_6h) / _close_6h
+                if _pct_change <= -0.03:
+                    logger.info(
+                        f"{slot_key}: skipped — BTC crash regime "
+                        f"({_pct_change:+.2%} over 6h, signals unreliable)"
+                    )
+                    self._release_trade_slot(slot_key)
+                    return
+        except Exception:
+            pass
+
         _cw_min = _now_cw.minute - (_now_cw.minute % 15)
         current_window = _now_cw.replace(minute=_cw_min, second=0, microsecond=0, tzinfo=None)
         with self._lock:
@@ -648,21 +672,35 @@ class Trader:
                         logger.info(f"{slot_key}: re-entry blocked on {ticker} ({tag} cooloff)")
                         continue
 
-                # Opposite-side guard: Kalshi does not allow holding both YES and NO
-                # on the same market simultaneously. Block if an open trade already
-                # holds the opposite direction on this exact ticker.
-                _opp = False
+                # Open-trades game guard: block if ANY open trade already exists for
+                # this same game matchup (same game_key), regardless of direction or
+                # ticker side. Prevents both YES-A and NO-B on the same game.
+                _open_now = {}
                 try:
                     with self._file_lock:
                         with open(_OPEN_TRADES_FILE) as _ot_f:
                             _open_now = json.load(_ot_f)
-                    for _td in _open_now.values():
-                        if (_td.get("kalshi_ticker") == ticker
-                                and _td.get("direction") != direction):
-                            _opp = True
-                            break
                 except Exception:
                     pass
+                _game_already_open = False
+                _opp = False
+                for _td in _open_now.values():
+                    _open_ticker = _td.get("kalshi_ticker", "")
+                    _open_gk = (
+                        _open_ticker.rsplit("-", 1)[0]
+                        if _open_ticker.count("-") >= 2
+                        else _open_ticker
+                    )
+                    if _open_gk == game_key:
+                        _game_already_open = True
+                    if _td.get("kalshi_ticker") == ticker and _td.get("direction") != direction:
+                        _opp = True
+                if _game_already_open:
+                    logger.info(
+                        f"{slot_key} [{ticker}]: skipping — open trade already "
+                        f"exists for matchup {game_key}"
+                    )
+                    continue
                 if _opp:
                     logger.info(
                         f"{slot_key} [{ticker}]: skipping — already hold "
@@ -689,6 +727,19 @@ class Trader:
                 except ValueError:
                     pass
 
+            # Within-cycle dedup: if a market from the same game is already in candidates
+            # (e.g. YES-CLE and NO-LAD both pass guards before any trade is placed),
+            # skip the lower-confidence one — only one game per matchup per scan cycle.
+            _cand_game_key = (
+                ticker.rsplit("-", 1)[0] if ticker.count("-") >= 2 else ticker
+            )
+            if any(c.get("game_key") == _cand_game_key for c in candidates):
+                logger.info(
+                    f"{slot_key} [{ticker}]: skipping — same matchup already "
+                    f"in candidates this cycle ({_cand_game_key})"
+                )
+                continue
+
             candidates.append({
                 "market":          market,
                 "ticker":          ticker,
@@ -699,6 +750,7 @@ class Trader:
                 "settlement_open": settlement_open,
                 "confidence":      decision.get("confidence", 0.0),
                 "market_label":    decision.get("market_label", slot_key),
+                "game_key":        _cand_game_key,
             })
 
         # --- Phase 2: compute budget-based sizing, sort by confidence, execute top candidate ---
@@ -1254,9 +1306,10 @@ class Trader:
     def _save_sports_state(self):
         """Persist sports game counts and budget spend to disk (same-day restoration after restart)."""
         with self._lock:
-            gb = dict(self._sport_games_bet)
-            bs = dict(self._sport_budget_spent)
-            gc = dict(self._game_trade_counts)
+            gb    = dict(self._sport_games_bet)
+            bs    = dict(self._sport_budget_spent)
+            gc    = dict(self._game_trade_counts)
+            bsnap = dict(self._sport_budget_snap)
         with self._file_lock:
             try:
                 state = {
@@ -1264,7 +1317,7 @@ class Trader:
                     "games_bet":    gb,
                     "budget_spent": bs,
                     "game_counts":  gc,
-                    "budget_snap":  dict(self._sport_budget_snap),
+                    "budget_snap":  bsnap,
                 }
                 with open(_SPORTS_STATE_FILE, "w") as _f:
                     json.dump(state, _f)

@@ -123,6 +123,16 @@ class Strategy:
             direction = NONE
             reason = f"No confluence — bull={bull_count} bear={bear_count}{extra_tag}"
 
+        # Momentum gate: if momentum actively contradicts the intended direction, skip.
+        # rsi/macd=bull but mom=bear means price is pulling back in an uptrend — bad LONG.
+        # This combo accounts for ~31% of crypto trades at only 41% WR (-$61 PnL).
+        if direction == LONG and signals["momentum_bias"] == "bear":
+            direction = NONE
+            reason = f"Momentum contradicts LONG (bull={bull_count} but mom=bear){extra_tag}"
+        elif direction == SHORT and signals["momentum_bias"] == "bull":
+            direction = NONE
+            reason = f"Momentum contradicts SHORT (bear={bear_count} but mom=bull){extra_tag}"
+
         # News filter: block trades where high-confidence news directly
         # contradicts the technical direction. Medium/neutral news is logged only.
         news = None

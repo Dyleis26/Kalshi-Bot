@@ -378,7 +378,14 @@ def _minutes_remaining(espn_sport: str, period: int, clock: str, short_detail: s
     # Parse clock "M:SS" → decimal minutes
     clock_mins = _parse_clock(clock)
     if clock_mins is None:
-        return None
+        # Halftime / end-of-period breaks: ESPN may send empty displayClock.
+        # If short_detail confirms we're at a period boundary, assume 0 minutes
+        # remain in the current period — only future full periods count.
+        detail_lower = short_detail.lower()
+        if any(k in detail_lower for k in ("halftime", "half time", "end of", "intermission")):
+            clock_mins = 0.0
+        else:
+            return None
 
     # Minutes left in current period + full future periods
     periods_left = max(0, total_pds - period)

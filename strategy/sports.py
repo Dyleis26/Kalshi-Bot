@@ -16,7 +16,7 @@ team winning 79-62 in the 3rd quarter legitimately has YES > 0.80.
 
 import logging
 from data.sports import get_games, find_matching_game, compute_win_probability, get_nba_momentum
-from data.odds import get_odds, find_matching_odds
+from data.odds import get_odds, find_matching_odds, force_invalidate
 from data.mlb_stats import get_mlb_win_probability
 from data.team_stats import (
     get_nhl_standings, get_mlb_standings,
@@ -35,6 +35,10 @@ logger = logging.getLogger("strategy.sports")
 LONG  = "long"
 SHORT = "short"
 NONE  = "none"
+
+# Tracks known OUT players per game so we can detect newly-scratched players
+# and trigger an Odds API cache refresh before the edge is computed.
+_known_out_players: dict = {}  # {"{home}|{away}": set_of_out_player_strings}
 
 
 class SportsStrategy:
@@ -104,6 +108,24 @@ class SportsStrategy:
                     f"tied 0-0 in period {game.get('period',1)} — no live score edge yet",
                     yes_ask, sport_label, title,
                 )
+
+        # Injury pre-check (pre-game only): fetch OUT players for both teams before the
+        # odds call. If a player is newly OUT since the last check, invalidate the Odds API
+        # cache so get_odds() below fetches a fresh line rather than the stale cached one.
+        if not is_live and ODDS_API_KEY:
+            _hi = get_espn_injuries(game.get("home_team_id", ""), espn_sport)
+            _ai = get_espn_injuries(game.get("away_team_id", ""), espn_sport)
+            _game_key = f"{game['home_abbr']}|{game['away_abbr']}"
+            _out_now  = {p for p in (_hi + _ai) if "(out)" in p.lower() or "injur" in p.lower()}
+            _prev_out = _known_out_players.get(_game_key, set())
+            _new_out  = _out_now - _prev_out
+            if _new_out:
+                logger.info(
+                    f"Sports [{sport_label}]: injury alert {_game_key} — "
+                    f"new OUT: {', '.join(_new_out)} — refreshing Odds API"
+                )
+                force_invalidate(espn_sport)
+            _known_out_players[_game_key] = _out_now
 
         # Win probability source (in priority order):
         #   In-game MLB   → MLB Stats API base-out state model (most accurate)

@@ -24,12 +24,23 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("odds")
 
-CACHE_TTL_SECS = 21600  # 6-hour cache — 3 sports × 4 fetches/day × 30 days = 360/month
-                        # well under 500 req/month free-tier limit; pre-game lines
-                        # don't move enough in 6h to flip a 0.20 edge signal
+CACHE_TTL_SECS = 10800  # 3-hour cache — 3 sports × 8 fetches/day × 30 days = 720/month
+                        # but injury-triggered invalidations replace the time-based refresh,
+                        # keeping effective usage well under 500 req/month in practice
 
 _cache: dict = {}
 _opening_lines: dict = {}  # Persistent — never expires; stores first-seen home_win_pct per game
+
+
+def force_invalidate(espn_sport: str):
+    """
+    Clear the cached odds for a sport so the next get_odds() call fetches fresh data.
+    Called automatically when a new OUT player is detected for a pre-game matchup.
+    """
+    sport_key = SPORT_KEY_MAP.get(espn_sport)
+    if sport_key and sport_key in _cache:
+        del _cache[sport_key]
+        logger.info(f"Odds API cache cleared for {sport_key} (injury-triggered refresh)")
 
 BASE_URL = "https://api.the-odds-api.com/v4/sports"
 

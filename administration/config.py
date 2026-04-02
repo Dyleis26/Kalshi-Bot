@@ -117,18 +117,21 @@ MAX_LOSING_STREAK = 999     # Data collection: disabled
 LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 
 # --- Bet Sizing (percentage-based, dynamic) ---
-# BTC:    each trade = BET_PCT_OF_SLOT × slot_capital
-#                    = 0.50 × (portfolio.capital × 0.25)
-# Sports: daily budget = BET_PCT_OF_SLOT × slot_capital per sport slot
+# BTC:    confidence-scaled % of slot_capital, hard-capped at BTC_MAX_BET
+#           conf < 50%  → BTC_BET_PCT_LOW  (10%) of slot_capital
+#           conf 50-74% → BTC_BET_PCT_MID  (15%) of slot_capital
+#           conf 75%+   → BTC_BET_PCT_HIGH (20%) of slot_capital
+#           hard cap: min(calculated, BTC_MAX_BET)
+# Sports: daily budget = SPORTS_DAILY_BUDGET_PCT × slot_capital per sport slot
 #         per-game bet = daily_budget / min(N_tradeable_now, remaining_capacity)
 #         — fractions up when fewer good games available, spreads thin when many
 #
 # With $500 starting balance:
-#   capital = $250  →  slot_capital = $62.50  →  BTC max bet = $31.25
-#                                              →  Sports daily budget = $46.88 (75%)
-#                                              →  Sports per-game cap = $15.63 (25% of slot)
-#                                              →  Sports per-game (5 games) = min($9.38, $15.63) = $9.38
-#                                              →  Sports per-game (1 game)  = min($46.88, $15.63) = $15.63
+#   capital = $250  →  slot_capital = $62.50
+#                                   →  BTC bet (50-74% conf) = $9.38, capped at $25
+#                                   →  BTC bet (75%+ conf)   = $12.50, capped at $25
+#                                   →  Sports daily budget = $46.88 (75%)
+#                                   →  Sports per-game cap = $15.63 (25% of slot)
 #
 # After every trade portfolio.capital updates automatically, so bet size
 # self-adjusts without any separate rebalance step:
@@ -137,7 +140,11 @@ LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 #   cash is NEVER used for losses (record_loss touches capital only)
 #
 SLOT_CAPITAL_PCT        = 0.25   # 25% of capital pool per slot (4 slots)
-BET_PCT_OF_SLOT         = 0.50   # BTC: max 50% of slot capital per trade; Sports: 50% total daily budget
+BET_PCT_OF_SLOT         = 0.50   # Sports only: 50% of slot capital = daily budget
+BTC_BET_PCT_LOW         = 0.10   # BTC conf <50%:  10% of slot capital
+BTC_BET_PCT_MID         = 0.15   # BTC conf 50-74%: 15% of slot capital
+BTC_BET_PCT_HIGH        = 0.20   # BTC conf 75%+:  20% of slot capital
+BTC_MAX_BET             = 25.00  # Hard dollar cap on any single BTC trade
 SPORTS_MAX_BET_PCT      = 0.25   # Hard cap: no single sports game bet exceeds 25% of slot capital
 
 # --- Kalshi Contract Price Filter (near-fair zone) ---

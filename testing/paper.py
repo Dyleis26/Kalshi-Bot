@@ -14,6 +14,7 @@ from administration.config import (
     STARTING_BALANCE, MAX_TRADES_PER_HOUR, KALSHI_MAKER_FEE, FORCE_TRADE, SLOTS,
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX, CONTRACT_BUY_MIN, CONTRACT_BUY_MAX, NEWS_ENABLED,
     SLOT_CAPITAL_PCT, BET_PCT_OF_SLOT, NUM_SLOTS,
+    BTC_BET_PCT_LOW, BTC_BET_PCT_MID, BTC_BET_PCT_HIGH, BTC_MAX_BET,
     STOP_LOSS_PRICE, TRAILING_TRIGGER, TRAILING_BUFFER,
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
     MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS, SPORTS_INGAME_COOLOFF_MINS,
@@ -483,12 +484,18 @@ class Trader:
         side           = "yes" if direction == LONG else "no"
         contract_price = yes_price if direction == LONG else no_price
 
-        # Dynamic sizing: BET_PCT_OF_SLOT of this slot's SLOT_CAPITAL_PCT capital allocation.
+        # Confidence-scaled BTC sizing: smaller bets at low confidence, larger at high.
         # Rebalances automatically after every trade since portfolio.capital is live.
         with self._lock:
             slot_capital = self.portfolio.capital * SLOT_CAPITAL_PCT
             consec = self._consec_losses[slot_key]
-        size = round(slot_capital * BET_PCT_OF_SLOT, 2)
+        if confidence_pct >= 75.0:
+            btc_pct = BTC_BET_PCT_HIGH
+        elif confidence_pct >= 50.0:
+            btc_pct = BTC_BET_PCT_MID
+        else:
+            btc_pct = BTC_BET_PCT_LOW
+        size = round(min(slot_capital * btc_pct, BTC_MAX_BET), 2)
         if consec >= CONSEC_LOSS_THRESHOLD:
             size = round(size * CONSEC_LOSS_REDUCTION, 2)
             logger.info(f"{slot_key}: cooldown active ({consec} consecutive losses) — bet reduced to ${size:.2f}")
@@ -1354,7 +1361,7 @@ class Trader:
                 with self._lock:
                     p = self.portfolio
                     slot_cap     = round(p.capital * SLOT_CAPITAL_PCT, 2)
-                    btc_max_bet  = round(slot_cap * BET_PCT_OF_SLOT, 2)
+                    btc_max_bet  = round(min(slot_cap * BTC_BET_PCT_HIGH, BTC_MAX_BET), 2)
                     sport_budget = round(slot_cap * SPORTS_DAILY_BUDGET_PCT, 2)
                 if p.total > 0:
                     logger.info(

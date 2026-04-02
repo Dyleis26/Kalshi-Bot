@@ -132,7 +132,7 @@ class KalshiClient:
                   'JUL':7,'AUG':8,'SEP':9,'OCT':10,'NOV':11,'DEC':12}
 
         try:
-            data = self._get(
+            data = self._get_public(
                 "/markets",
                 params={"status": "open", "series_ticker": series_prefix, "limit": 100},
             )

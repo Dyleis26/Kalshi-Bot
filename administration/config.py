@@ -69,11 +69,14 @@ NUM_SLOTS = len(SLOTS)  # 4 — BTC, MLB, NBA, NHL
 # --- Non-crypto slot settings ---
 MARKET_EVAL_INTERVAL_SECS  = 60    # Poll sports slots every 60s — faster in-game edge capture
 # Sports close_time is weeks away (settlement); game_date_filter (ticker date) is used instead.
-SPORTS_EDGE_MIN            = 0.20  # Need ≥20% edge over Kalshi YES price to enter
+SPORTS_EDGE_MIN            = 0.10  # Need ≥10% edge over Kalshi YES price to enter
+                                   # Math: min profitable edge (fees only) ≈ 0.018; 0.10 gives ~16% ROI
+                                   # Pre-game backed by Pinnacle odds (±2-3% error) → 0.10 is reliable
+                                   # In-game backed by Gaussian model (±5-8% error) → 0.10 leaves meaningful cushion
 SPORTS_CONTRACT_PRICE_MIN  = 0.20  # In-game price floor (live favorites can be 0.80+ and still have edge)
 SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game price ceiling
 SPORTS_PREGAME_PRICE_MIN   = 0.40  # Pre-game floor — underdogs below 0.40 rarely have enough edge
-SPORTS_PREGAME_PRICE_MAX   = 0.70  # Pre-game ceiling — favorites above 0.70 need model p≥0.90 to get 0.20 edge
+SPORTS_PREGAME_PRICE_MAX   = 0.70  # Pre-game ceiling — favorites above 0.70 need p≥0.80 to get 0.10 edge
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
 SPORTS_MAX_GAMES_PER_SLOT  = 5     # Max unique game matchups per sports slot per day
 SPORTS_MAX_TRADES_PER_GAME = 1     # One trade per game matchup — no re-entries ever
@@ -96,7 +99,9 @@ MOMENTUM_LOOKBACK = 3   # Candles to look back for momentum (3 × 15m = 45 min)
 MACD_MIN = 0.0003       # Neutral deadband: histogram must exceed 0.03% of price to count
                         # Normalized by current price in signals.py so it works across all assets
 VWAP_MIN_PCT = 0.001    # Price must be 0.10%+ away from VWAP to count as directional
-MIN_CONFIDENCE = 5    # Minimum votes (out of 8) to enter — requires real confluence
+MIN_CONFIDENCE = 4    # Minimum votes (out of 8) to enter — 4/8 = 50% agreement
+                      # Safe at lower confidence because bet size is small (10% of slot capital ≈ $6)
+                      # More trades + smaller sizes = better data + lower variance than fewer big bets
 FORCE_TRADE = False   # Only trade when MIN_CONFIDENCE signals agree; skip uncertain windows
 
 # --- Execution ---

@@ -1,9 +1,15 @@
+import json
+import logging
+import os
+
 from administration.config import (
     STARTING_BALANCE, CASH_SPLIT, CAPITAL_SPLIT,
     PROFIT_TO_CASH,
     DAILY_LOSS_LIMIT, MAX_LOSING_STREAK, LOSING_STREAK_REDUCTION,
     MIN_BET
 )
+
+logger = logging.getLogger("portfolio")
 
 
 class Portfolio:
@@ -97,6 +103,44 @@ class Portfolio:
     # ------------------------------------------------------------------ #
     #  Summary                                                             #
     # ------------------------------------------------------------------ #
+
+    def save(self, path: str):
+        """Persist cash/capital to disk so restarts resume from the correct balance."""
+        try:
+            with open(path, "w") as f:
+                json.dump({
+                    "cash":          self.cash,
+                    "capital":       self.capital,
+                    "losing_streak": self.losing_streak,
+                }, f)
+        except Exception as e:
+            logger.warning(f"Portfolio save failed: {e}")
+
+    @classmethod
+    def load(cls, path: str, starting_balance: float = None):
+        """
+        Load persisted portfolio state if available.
+        Falls back to a fresh portfolio if the file is missing or corrupt.
+        """
+        balance = starting_balance or STARTING_BALANCE
+        try:
+            with open(path) as f:
+                state = json.load(f)
+            inst = cls(balance)
+            inst.cash    = float(state["cash"])
+            inst.capital = float(state["capital"])
+            inst.capital_at_day_start = inst.capital
+            inst.losing_streak = int(state.get("losing_streak", 0))
+            logger.info(
+                f"Portfolio restored — total=${inst.total:.2f} "
+                f"(cash=${inst.cash:.2f}, capital=${inst.capital:.2f})"
+            )
+            return inst
+        except FileNotFoundError:
+            return cls(balance)
+        except Exception as e:
+            logger.warning(f"Portfolio load failed ({e}) — starting fresh at ${balance:.2f}")
+            return cls(balance)
 
     def summary(self):
         return {

@@ -33,9 +33,10 @@ from administration.logger import get as get_logger, log_trade, log_halt
 logger = get_logger("paper")
 
 # Paths for persisting crypto trade windows and open positions across restarts
-_TRADE_STATE_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".btc_last_trade.json")
-_OPEN_TRADES_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".open_trades.json")
-_SPORTS_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".sports_state.json")
+_TRADE_STATE_FILE      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".btc_last_trade.json")
+_OPEN_TRADES_FILE      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".open_trades.json")
+_SPORTS_STATE_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".sports_state.json")
+_PORTFOLIO_STATE_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".portfolio_state.json")
 
 
 class Trader:
@@ -56,7 +57,7 @@ class Trader:
 
     def __init__(self, live: bool = False, starting_balance: float = STARTING_BALANCE):
         self.live      = live
-        self.portfolio = Portfolio(starting_balance)
+        self.portfolio = Portfolio.load(_PORTFOLIO_STATE_FILE, starting_balance)
         self.monitor   = Monitor()
         self.discord   = Discord(paper=not live)
         self.trade_log = TradeLog(mode="live" if live else "paper")
@@ -1093,6 +1094,7 @@ class Trader:
                 self.session_wins += 1
                 self.session_pnl   = round(self.session_pnl + pnl, 4)
                 self.portfolio.record_win(pnl)
+                self.portfolio.save(_PORTFOLIO_STATE_FILE)
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
@@ -1112,6 +1114,7 @@ class Trader:
                 self.session_losses += 1
                 self.session_pnl     = round(self.session_pnl + pnl, 4)
                 self.portfolio.record_loss(abs(pnl))
+                self.portfolio.save(_PORTFOLIO_STATE_FILE)
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
@@ -1214,6 +1217,7 @@ class Trader:
                 self.session_wins += 1
                 self.session_pnl   = round(self.session_pnl + pnl, 4)
                 self.portfolio.record_win(pnl)
+                self.portfolio.save(_PORTFOLIO_STATE_FILE)
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
@@ -1239,6 +1243,7 @@ class Trader:
                 self.session_losses += 1
                 self.session_pnl     = round(self.session_pnl + pnl, 4)
                 self.portfolio.record_loss(abs(pnl))
+                self.portfolio.save(_PORTFOLIO_STATE_FILE)
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()

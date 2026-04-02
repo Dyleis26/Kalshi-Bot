@@ -96,7 +96,7 @@ MOMENTUM_LOOKBACK = 3   # Candles to look back for momentum (3 × 15m = 45 min)
 MACD_MIN = 0.0003       # Neutral deadband: histogram must exceed 0.03% of price to count
                         # Normalized by current price in signals.py so it works across all assets
 VWAP_MIN_PCT = 0.001    # Price must be 0.10%+ away from VWAP to count as directional
-MIN_CONFIDENCE = 4    # Minimum votes (out of 8) to enter — requires real confluence
+MIN_CONFIDENCE = 5    # Minimum votes (out of 8) to enter — requires real confluence
 FORCE_TRADE = False   # Only trade when MIN_CONFIDENCE signals agree; skip uncertain windows
 
 # --- Execution ---

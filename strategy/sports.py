@@ -40,6 +40,16 @@ NONE  = "none"
 # and trigger an Odds API cache refresh before the edge is computed.
 _known_out_players: dict = {}  # {"{home}|{away}": set_of_out_player_strings}
 
+# ESPN uses shortened abbreviations; some NHL API endpoints return longer codes.
+# Map ESPN abbr → NHL API abbr so standings lookups don't return empty dicts.
+_NHL_ABBR_ESPN_TO_API: dict = {
+    "TB":  "TBL",   # Tampa Bay Lightning
+    "NJ":  "NJD",   # New Jersey Devils
+    "LA":  "LAK",   # Los Angeles Kings
+    "SJ":  "SJS",   # San Jose Sharks
+    "CB":  "CBJ",   # Columbus Blue Jackets
+}
+
 
 class SportsStrategy:
 
@@ -222,8 +232,10 @@ class SportsStrategy:
         # Pull official standings (NHL / MLB) for richer L10 + splits
         if espn_sport == "hockey/nhl":
             standings = get_nhl_standings()
-            hst = standings.get(game.get("home_abbr", ""), {})
-            ast = standings.get(game.get("away_abbr", ""), {})
+            _h_abbr = game.get("home_abbr", "")
+            _a_abbr = game.get("away_abbr", "")
+            hst = standings.get(_NHL_ABBR_ESPN_TO_API.get(_h_abbr, _h_abbr), {})
+            ast = standings.get(_NHL_ABBR_ESPN_TO_API.get(_a_abbr, _a_abbr), {})
             if hst:
                 home_record      = hst["record"]
                 home_home_record = hst["home"]

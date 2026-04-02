@@ -56,19 +56,21 @@ def get(name="bot"):
 
 
 def log_trade(direction: str, price: float, size: float, confidence_pct: float = 0.0,
-              result: str = None, pnl: float = None):
+              result: str = None, pnl: float = None,
+              slot_type: str = "", market_label: str = ""):
     """Log a trade entry or result to the trade log."""
     logger = logging.getLogger("trade")
     if result is None:
         logger.info(
-            f"ENTRY | {direction.upper()} | price={price:.4f} | size=${size:.2f} "
+            f"ENTRY | {slot_type.upper() or 'UNKNOWN'} | {direction.upper()} "
+            f"| market={market_label or 'unknown'} | price={price:.4f} | size=${size:.2f} "
             f"| conf={confidence_pct:.1f}%"
         )
     else:
         logger.info(
-            f"RESULT | {result.upper()} | direction={direction.upper()} "
-            f"| price={price:.4f} | size=${size:.2f} | pnl=${pnl:+.2f} "
-            f"| conf={confidence_pct:.1f}%"
+            f"RESULT | {result.upper()} | {slot_type.upper() or 'UNKNOWN'} | {direction.upper()} "
+            f"| market={market_label or 'unknown'} | price={price:.4f} | size=${size:.2f} "
+            f"| pnl=${pnl:+.2f} | conf={confidence_pct:.1f}%"
         )
 
 

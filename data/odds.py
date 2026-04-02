@@ -115,6 +115,14 @@ def get_odds(espn_sport: str, api_key: str) -> list[dict]:
 
         remaining = resp.headers.get("x-requests-remaining", "?")
         logger.info(f"Odds API {sport_key}: {len(games)} games, {remaining} requests left this month")
+        try:
+            if int(remaining) < 100:
+                logger.warning(
+                    f"Odds API quota low: only {remaining} requests remaining this month — "
+                    f"consider extending cache TTL or disabling non-essential refreshes"
+                )
+        except (ValueError, TypeError):
+            pass
         return games
 
     except Exception as e:

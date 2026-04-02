@@ -37,6 +37,7 @@ _TRADE_STATE_FILE      = os.path.join(os.path.dirname(os.path.abspath(__file__))
 _OPEN_TRADES_FILE      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".open_trades.json")
 _SPORTS_STATE_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".sports_state.json")
 _PORTFOLIO_STATE_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".portfolio_state.json")
+_SESSION_STATE_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".session_state.json")
 
 
 class Trader:
@@ -159,6 +160,26 @@ class Trader:
         self._consec_losses:        dict = {k: 0 for k in SLOTS}
         self._tracked_windows:      dict = {}
         self._sweep_cooloff_window       = None  # skip BTC trades in this 15M window
+
+        # Restore session stats and consecutive-loss counters from disk (same UTC day only)
+        try:
+            with open(_SESSION_STATE_FILE) as _f:
+                _sess = json.load(_f)
+            if _sess.get("date_utc") == datetime.now(timezone.utc).date().isoformat():
+                self.session_wins   = int(_sess.get("session_wins", 0))
+                self.session_losses = int(_sess.get("session_losses", 0))
+                self.session_pnl    = float(_sess.get("session_pnl", 0.0))
+                for _k, _v in _sess.get("consec_losses", {}).items():
+                    if _k in self._consec_losses:
+                        self._consec_losses[_k] = int(_v)
+                logger.info(
+                    f"Restored session state: {self.session_wins}W-{self.session_losses}L "
+                    f"pnl=${self.session_pnl:+.2f} consec={self._consec_losses}"
+                )
+        except FileNotFoundError:
+            pass
+        except Exception as _exc:
+            logger.warning(f"Could not restore session state: {_exc}")
 
         # Last non-crypto poll timestamp
         self._last_market_poll = 0.0
@@ -925,7 +946,8 @@ class Trader:
             "entry_time_iso": datetime.now(timezone.utc).isoformat(),
         })
 
-        log_trade(direction, contract_price, total_cost, confidence_pct=confidence_pct)
+        log_trade(direction, contract_price, total_cost, confidence_pct=confidence_pct,
+                  slot_type=slot_type, market_label=market_label)
         self.monitor.record_order_placed()
         self.discord.buy(
             direction=direction,
@@ -1100,7 +1122,8 @@ class Trader:
                 port_summary = self.portfolio.summary()
                 self._consec_losses[slot_key] = 0
             log_trade(direction, contract_price, actual_cost, result="win", pnl=pnl,
-                      confidence_pct=confidence_pct)
+                      confidence_pct=confidence_pct, slot_type=slot_type, market_label=market_label)
+            self._save_session_state()
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
@@ -1120,7 +1143,8 @@ class Trader:
                 port_summary = self.portfolio.summary()
                 self._consec_losses[slot_key] = min(self._consec_losses[slot_key] + 1, 10)
             log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl,
-                      confidence_pct=confidence_pct)
+                      confidence_pct=confidence_pct, slot_type=slot_type, market_label=market_label)
+            self._save_session_state()
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(
@@ -1227,7 +1251,8 @@ class Trader:
                         settlement_open, {"wins": 0, "losses": 0}
                     )["wins"] += 1
             log_trade(direction, contract_price, actual_cost, result="win", pnl=pnl,
-                      confidence_pct=confidence_pct)
+                      confidence_pct=confidence_pct, slot_type=slot_type, market_label=market_label)
+            self._save_session_state()
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
@@ -1266,7 +1291,8 @@ class Trader:
                     for _k in [k for k in self._tracked_windows if k < _cutoff]:
                         del self._tracked_windows[_k]
             log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl,
-                      confidence_pct=confidence_pct)
+                      confidence_pct=confidence_pct, slot_type=slot_type, market_label=market_label)
+            self._save_session_state()
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(
@@ -1339,6 +1365,27 @@ class Trader:
                     json.dump(state, _f)
             except Exception as exc:
                 logger.warning(f"Could not save sports state: {exc}")
+
+    def _save_session_state(self):
+        """Persist session W/L counters and consecutive-loss streak to disk (same-day restoration)."""
+        with self._lock:
+            wins   = self.session_wins
+            losses = self.session_losses
+            pnl    = self.session_pnl
+            consec = dict(self._consec_losses)
+        with self._file_lock:
+            try:
+                state = {
+                    "date_utc":      datetime.now(timezone.utc).date().isoformat(),
+                    "session_wins":  wins,
+                    "session_losses": losses,
+                    "session_pnl":   pnl,
+                    "consec_losses": consec,
+                }
+                with open(_SESSION_STATE_FILE, "w") as _f:
+                    json.dump(state, _f)
+            except Exception as exc:
+                logger.warning(f"Could not save session state: {exc}")
 
     # ------------------------------------------------------------------ #
     #  Heartbeat                                                           #

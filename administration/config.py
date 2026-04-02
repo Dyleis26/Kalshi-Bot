@@ -125,9 +125,10 @@ LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 #
 # With $500 starting balance:
 #   capital = $250  →  slot_capital = $62.50  →  BTC max bet = $31.25
-#                                              →  Sports daily budget = $31.25
-#                                              →  Sports per-game (5 games) = $6.25
-#                                              →  Sports per-game (1 game)  = $31.25
+#                                              →  Sports daily budget = $46.88 (75%)
+#                                              →  Sports per-game cap = $15.63 (25% of slot)
+#                                              →  Sports per-game (5 games) = min($9.38, $15.63) = $9.38
+#                                              →  Sports per-game (1 game)  = min($46.88, $15.63) = $15.63
 #
 # After every trade portfolio.capital updates automatically, so bet size
 # self-adjusts without any separate rebalance step:
@@ -135,8 +136,9 @@ LOSING_STREAK_REDUCTION = 1.0   # Data collection: no size reduction
 #   loss → capital shrinks → next bet slightly smaller
 #   cash is NEVER used for losses (record_loss touches capital only)
 #
-SLOT_CAPITAL_PCT = 0.25   # 25% of capital pool per slot (4 slots)
-BET_PCT_OF_SLOT  = 0.50   # BTC: max 50% of slot capital per trade; Sports: 50% total daily budget
+SLOT_CAPITAL_PCT        = 0.25   # 25% of capital pool per slot (4 slots)
+BET_PCT_OF_SLOT         = 0.50   # BTC: max 50% of slot capital per trade; Sports: 50% total daily budget
+SPORTS_MAX_BET_PCT      = 0.25   # Hard cap: no single sports game bet exceeds 25% of slot capital
 
 # --- Kalshi Contract Price Filter (near-fair zone) ---
 # Only trade when YES is in this range — outside it the payout asymmetry makes

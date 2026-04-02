@@ -18,7 +18,7 @@ from administration.config import (
     SWEEP_COOLOFF_LOSSES, CONSEC_LOSS_THRESHOLD, CONSEC_LOSS_REDUCTION,
     MARKET_EVAL_INTERVAL_SECS, MARKET_MAX_CLOSE_HOURS, SPORTS_INGAME_COOLOFF_MINS,
     INGAME_STALE_MARKET_SECS, SPORTS_MAX_GAMES_PER_SLOT, SPORTS_MAX_TRADES_PER_GAME,
-    SPORTS_DAILY_BUDGET_PCT,
+    SPORTS_DAILY_BUDGET_PCT, SPORTS_MAX_BET_PCT,
 )
 from administration.news import NewsContext
 from administration.kalshi import KalshiClient
@@ -764,6 +764,10 @@ class Trader:
             per_game_size = round(budget_remaining / min(n_tradeable, remaining_capacity), 2)
         else:
             per_game_size = 0.0
+        # Hard cap: no single game exceeds 25% of slot capital regardless of budget math
+        _slot_cap_now = self.portfolio.capital * SLOT_CAPITAL_PCT
+        _max_per_game = round(_slot_cap_now * SPORTS_MAX_BET_PCT, 2)
+        per_game_size = min(per_game_size, _max_per_game)
 
         traded = False
 

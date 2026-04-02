@@ -417,13 +417,24 @@ def _mlb_half_innings_remaining(inning: int, short_detail: str) -> Optional[int]
 
 
 def _parse_clock(clock: str) -> Optional[float]:
-    """Parse "M:SS" or "M:SS.s" clock string into decimal minutes. Returns None on failure."""
-    if not clock or ':' not in clock:
+    """Parse clock string into decimal minutes. Returns None on failure.
+
+    Handles two ESPN formats:
+      - "M:SS[.s]"  standard format e.g. "5:15", "1:39.0"
+      - "SS[.s]"    bare-seconds format used in the final minute of a period e.g. "48.3", "0.0"
+    """
+    if not clock:
         return None
+    if ':' in clock:
+        try:
+            parts = clock.split(':')
+            return int(parts[0]) + float(parts[1]) / 60.0
+        except (ValueError, IndexError):
+            return None
+    # Bare-seconds format (final minute of period) — convert seconds → decimal minutes
     try:
-        parts = clock.split(':')
-        return int(parts[0]) + float(parts[1]) / 60.0
-    except (ValueError, IndexError):
+        return float(clock) / 60.0
+    except ValueError:
         return None
 
 

@@ -26,6 +26,7 @@ from data.team_stats import (
 from administration.config import (
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX,
     SPORTS_EDGE_MIN, SPORTS_CONTRACT_PRICE_MIN, SPORTS_CONTRACT_PRICE_MAX,
+    SPORTS_PREGAME_PRICE_MIN, SPORTS_PREGAME_PRICE_MAX,
     ODDS_API_KEY,
 )
 
@@ -81,12 +82,16 @@ class SportsStrategy:
                 yes_ask, sport_label, title,
             )
 
-        # Price range filter: wider for in-game (live markets can be 0.20–0.80+)
-        price_min = SPORTS_CONTRACT_PRICE_MIN if is_live else CONTRACT_PRICE_MIN
-        price_max = SPORTS_CONTRACT_PRICE_MAX if is_live else CONTRACT_PRICE_MAX
+        # Price range filter: widest for in-game, moderate for pre-game
+        # In-game: 0.20–0.80 (live score gives real edge even at extreme prices)
+        # Pre-game: 0.40–0.70 (model less certain; edge filter does the real work)
+        if is_live:
+            price_min, price_max = SPORTS_CONTRACT_PRICE_MIN, SPORTS_CONTRACT_PRICE_MAX
+        else:
+            price_min, price_max = SPORTS_PREGAME_PRICE_MIN, SPORTS_PREGAME_PRICE_MAX
         if not (price_min <= yes_ask <= price_max):
             status_tag = "in-game" if is_live else "pre-game"
-            return _no_trade(f"market too confident ({status_tag} YES={yes_ask:.2f})", yes_ask, sport_label, title)
+            return _no_trade(f"price outside range ({status_tag} YES={yes_ask:.2f}, range {price_min:.2f}–{price_max:.2f})", yes_ask, sport_label, title)
 
         # Early-game 0-0 filter: when no score exists the Gaussian model returns p=0.50,
         # making any "edge" pure pre-game Kalshi mispricing — not live information.

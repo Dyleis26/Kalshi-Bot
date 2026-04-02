@@ -15,12 +15,12 @@ Cached for CACHE_TTL_SECS per sport to avoid repeated calls on every 5-min poll.
 
 import logging
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 logger = logging.getLogger("sports")
 
-CACHE_TTL_SECS = 60    # 1-minute TTL — must be < MARKET_EVAL_INTERVAL_SECS (120s) to stay fresh
+CACHE_TTL_SECS = 45    # 45s TTL — always fresh at 60s poll interval
 
 _cache: dict = {}
 
@@ -35,7 +35,10 @@ SPORT_PATHS = {
 
 def get_games(espn_sport: str) -> list[dict]:
     """
-    Return a list of today's games for the given ESPN sport path.
+    Return today's AND tomorrow's games for the given ESPN sport path.
+
+    Fetches both dates so the bot can study upcoming matchups all day and
+    enter pre-game markets well before tip-off/first pitch/puck drop.
 
     Each game dict:
         {
@@ -51,44 +54,60 @@ def get_games(espn_sport: str) -> list[dict]:
           "start_time":      str,   # ISO UTC start time
         }
 
+    Games are sorted: in-progress first, then pre-game — so find_matching_game()
+    always prefers a live game over a scheduled one with the same teams.
+
     Returns empty list on any error.
     """
+    cache_key = f"{espn_sport}_v2"
     now_ts = datetime.now(timezone.utc).timestamp()
 
-    if espn_sport in _cache:
-        entry = _cache[espn_sport]
+    if cache_key in _cache:
+        entry = _cache[cache_key]
         if now_ts - entry["_ts"] < CACHE_TTL_SECS:
             return entry["games"]
 
-    try:
-        url = f"{ESPN_BASE}/{espn_sport}/scoreboard"
-        resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            logger.warning(f"ESPN {espn_sport} HTTP {resp.status_code}")
-            return []
+    now_utc   = datetime.now(timezone.utc)
+    today_str    = now_utc.strftime("%Y%m%d")
+    tomorrow_str = (now_utc + timedelta(days=1)).strftime("%Y%m%d")
 
-        data = resp.json()
-        events = data.get("events", [])
-        games = []
+    all_games = []
+    seen_ids  = set()
 
-        for event in events:
-            try:
-                event["_espn_sport"] = espn_sport   # pass sport context to _parse_event
-                game = _parse_event(event)
-                if game:
-                    games.append(game)
-            except Exception as e:
-                logger.debug(f"Failed to parse ESPN event: {e}")
+    for date_str in [today_str, tomorrow_str]:
+        try:
+            url  = f"{ESPN_BASE}/{espn_sport}/scoreboard"
+            resp = requests.get(url, params={"dates": date_str}, timeout=10)
+            if resp.status_code != 200:
+                logger.warning(f"ESPN {espn_sport} HTTP {resp.status_code} (date={date_str})")
                 continue
 
-        _cache[espn_sport] = {"games": games, "_ts": now_ts}
-        sport_label = SPORT_PATHS.get(espn_sport, espn_sport)
-        logger.info(f"ESPN {sport_label}: {len(games)} games fetched")
-        return games
+            for event in resp.json().get("events", []):
+                try:
+                    gid = event.get("id", "")
+                    if gid in seen_ids:
+                        continue
+                    seen_ids.add(gid)
+                    event["_espn_sport"] = espn_sport
+                    game = _parse_event(event)
+                    if game:
+                        all_games.append(game)
+                except Exception as e:
+                    logger.debug(f"Failed to parse ESPN event: {e}")
 
-    except Exception as e:
-        logger.warning(f"ESPN {espn_sport} fetch error: {e}")
-        return []
+        except Exception as e:
+            logger.warning(f"ESPN {espn_sport} fetch error (date={date_str}): {e}")
+
+    # Sort: live games first so find_matching_game() always prefers in-progress
+    # over a scheduled game with the same two teams on consecutive days
+    all_games.sort(key=lambda g: 0 if g["status"] == "in" else 1)
+
+    _cache[cache_key] = {"games": all_games, "_ts": now_ts}
+    sport_label = SPORT_PATHS.get(espn_sport, espn_sport)
+    in_prog = sum(1 for g in all_games if g["status"] == "in")
+    pre     = sum(1 for g in all_games if g["status"] == "pre")
+    logger.info(f"ESPN {sport_label}: {len(all_games)} games ({in_prog} live, {pre} upcoming)")
+    return all_games
 
 
 def _parse_event(event: dict) -> Optional[dict]:

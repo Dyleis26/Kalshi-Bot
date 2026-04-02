@@ -67,17 +67,19 @@ SLOTS = {
 NUM_SLOTS = len(SLOTS)  # 4 — BTC, MLB, NBA, NHL
 
 # --- Non-crypto slot settings ---
-MARKET_EVAL_INTERVAL_SECS  = 120   # Poll sports slots every 2 minutes (faster in-game edge capture)
+MARKET_EVAL_INTERVAL_SECS  = 60    # Poll sports slots every 60s — faster in-game edge capture
 # Sports close_time is weeks away (settlement); game_date_filter (ticker date) is used instead.
 SPORTS_EDGE_MIN            = 0.20  # Need ≥20% edge over Kalshi YES price to enter
-SPORTS_CONTRACT_PRICE_MIN  = 0.20  # Broader range for in-game (pre-game uses 0.35)
-SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game favorites can be 0.80+ and still have edge
+SPORTS_CONTRACT_PRICE_MIN  = 0.20  # In-game price floor (live favorites can be 0.80+ and still have edge)
+SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game price ceiling
+SPORTS_PREGAME_PRICE_MIN   = 0.40  # Pre-game floor — underdogs below 0.40 rarely have enough edge
+SPORTS_PREGAME_PRICE_MAX   = 0.70  # Pre-game ceiling — favorites above 0.70 need model p≥0.90 to get 0.20 edge
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
 SPORTS_MAX_GAMES_PER_SLOT  = 5     # Max unique game matchups per sports slot per day
 SPORTS_MAX_TRADES_PER_GAME = 1     # One trade per game matchup — no re-entries ever
 SPORTS_DAILY_BUDGET_PCT    = 0.75  # Each sport slot spends up to 75% of its slot capital per day
 INGAME_STALE_MARKET_SECS   = 600   # Skip in-game market if Kalshi YES price unchanged >10 min
-MARKET_MAX_CLOSE_HOURS     = 36.0  # Sports markets: how far ahead to look for open markets
+MARKET_MAX_CLOSE_HOURS     = 48.0  # Sports markets: look 48h ahead — covers tomorrow's full schedule
 
 # --- Market ---
 INTERVALS = {

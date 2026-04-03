@@ -521,12 +521,13 @@ def get_nba_momentum(game_id: str) -> dict | None:
             elif home_away == "away":
                 away_pts += play_pts
 
-        # Compute adjustment: if one team outscored the other by 8+ in recent plays
+        # Compute adjustment: if one team outscored the other by 6+ in recent plays
+        # Threshold lowered 8→6 (fires more often); adjustment raised 0.03→0.05 (stronger signal)
         diff = home_pts - away_pts
-        if diff >= 8:
-            home_adj, away_adj = 0.03, -0.03
-        elif diff <= -8:
-            home_adj, away_adj = -0.03, 0.03
+        if diff >= 6:
+            home_adj, away_adj = 0.05, -0.05
+        elif diff <= -6:
+            home_adj, away_adj = -0.05, 0.05
         else:
             home_adj, away_adj = 0.0, 0.0
 

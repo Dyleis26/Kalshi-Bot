@@ -188,6 +188,11 @@ class Trader:
         # Format: {ticker: {"price": float, "last_changed": monotonic_time}}
         self._market_price_seen: dict = {}
 
+        # In-game price direction filter: track last 3 yes_ask values per ticker
+        # Used to reject trades where Kalshi is actively moving against our direction
+        # Format: {ticker: [(monotonic_time, yes_ask), ...]}  (max 3 entries)
+        self._market_price_history: dict = {}
+
         self.running      = False
         self._stopped     = False
         self._lock        = threading.Lock()
@@ -639,6 +644,12 @@ class Trader:
             if not (0.05 <= yes_ask <= 0.95):
                 continue
 
+            # Price direction history: track last 3 yes_ask observations per ticker
+            _ph = self._market_price_history.setdefault(ticker, [])
+            _ph.append((now_mono, yes_ask))
+            if len(_ph) > 3:
+                _ph.pop(0)
+
             # Stale market filter: skip in-game markets whose Kalshi price hasn't
             # changed in > INGAME_STALE_MARKET_SECS (price is stuck, not a real edge).
             seen = self._market_price_seen.get(ticker)
@@ -736,6 +747,26 @@ class Trader:
                         f"opposite side on this market"
                     )
                     continue
+
+            # In-game price direction filter: reject if Kalshi is actively moving
+            # against our intended direction (drift ≥ 0.06 over last 3 observations ≈ 2 min).
+            # Prevents entering trades where the market is already pricing us out in real time.
+            if is_ingame:
+                _ph = self._market_price_history.get(ticker, [])
+                if len(_ph) >= 3:
+                    _drift = _ph[-1][1] - _ph[0][1]
+                    if direction == LONG and _drift <= -0.06:
+                        logger.info(
+                            f"{slot_key} [{ticker}]: skip — price trending against LONG "
+                            f"({_drift:+.3f} over {len(_ph)} obs)"
+                        )
+                        continue
+                    if direction == SHORT and _drift >= 0.06:
+                        logger.info(
+                            f"{slot_key} [{ticker}]: skip — price trending against SHORT "
+                            f"({_drift:+.3f} over {len(_ph)} obs)"
+                        )
+                        continue
 
             no_ask         = float(market.get("no_ask_dollars", 0.5))
             contract_price = yes_ask if direction == LONG else no_ask

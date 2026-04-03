@@ -25,7 +25,8 @@ from data.team_stats import (
 )
 from administration.config import (
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX,
-    SPORTS_EDGE_MIN, SPORTS_CONTRACT_PRICE_MIN, SPORTS_CONTRACT_PRICE_MAX,
+    SPORTS_EDGE_MIN, SPORTS_PREGAME_EDGE_MIN, SPORTS_PREGAME_VOTE_MIN,
+    SPORTS_CONTRACT_PRICE_MIN, SPORTS_CONTRACT_PRICE_MAX,
     SPORTS_PREGAME_PRICE_MIN, SPORTS_PREGAME_PRICE_MAX,
     ODDS_API_KEY,
 )
@@ -322,14 +323,43 @@ class SportsStrategy:
         elif goalie_tag or wind_tag:
             logger.info(f"Sports [{sport_label}] context: {game.get('home_abbr','')}-{game.get('away_abbr','')}{goalie_tag}{wind_tag}")
 
+        # ------------------------------------------------------------------ #
+        #  Pre-game winner prediction vote score                              #
+        # ------------------------------------------------------------------ #
+        vote_score = 0
+        vote_detail = ""
+        if not is_live:
+            vote_score, vote_detail = _pregame_vote_score(
+                yes_team_win_pct=yes_team_win_pct,
+                home_p=home_p,
+                home_l10=home_l10,
+                away_l10=away_l10,
+                home_home_record=home_home_record,
+                away_road_record=away_road_record,
+                h2h_series=h2h_series,
+                line_movement=line_movement,
+                game=game,
+            )
+            logger.info(
+                f"Sports [{sport_label}]: pre-game votes {vote_score}/6 — {vote_detail}"
+            )
+
+        # Edge threshold: lower when vote score confirms LONG direction pre-game
+        if not is_live and vote_score >= SPORTS_PREGAME_VOTE_MIN and edge > 0:
+            active_threshold = SPORTS_PREGAME_EDGE_MIN
+        else:
+            active_threshold = SPORTS_EDGE_MIN
+
         src = prob_source + momentum_tag
-        if edge >= SPORTS_EDGE_MIN:
+        if edge >= active_threshold:
             direction = LONG
             reason = (
                 f"edge={edge:+.2f} ({src}, "
                 f"p={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f}) — buying YES"
             )
-        elif edge <= -SPORTS_EDGE_MIN:
+            if not is_live and vote_score > 0:
+                reason += f" | votes {vote_score}/6"
+        elif edge <= -active_threshold:
             direction = SHORT
             reason = (
                 f"edge={edge:+.2f} ({src}, "
@@ -338,9 +368,11 @@ class SportsStrategy:
         else:
             direction = NONE
             reason = (
-                f"edge too small: {edge:+.2f} < ±{SPORTS_EDGE_MIN} "
+                f"edge too small: {edge:+.2f} < ±{active_threshold} "
                 f"({src} p={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f})"
             )
+            if not is_live:
+                reason += f" | votes {vote_score}/6"
 
         logger.info(f"Sports [{sport_label}]: {reason}")
 
@@ -453,6 +485,95 @@ def _build_label(sport_label: str, title: str, game: dict, yes_sub: str = "") ->
         return f"{sport_label} - {game['away_abbr']} WIN"
 
     return f"{sport_label} - {game['home_abbr']} vs {game['away_abbr']}"
+
+
+def _parse_l10_wins(l10: str) -> int | None:
+    """Parse wins from an L10 string like '7-3' or '6-2-2' (NHL W-L-OTL)."""
+    if not l10:
+        return None
+    try:
+        return int(l10.split("-")[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _parse_venue_wp(record: str) -> float | None:
+    """Parse win% from a venue record like '21-16' or '23-13-1'."""
+    if not record:
+        return None
+    parts = record.split("-")
+    try:
+        wins   = int(parts[0])
+        losses = int(parts[1])
+        ot     = int(parts[2]) if len(parts) >= 3 else 0
+        total  = wins + losses + ot
+        return round(wins / total, 4) if total > 0 else None
+    except (ValueError, IndexError):
+        return None
+
+
+def _pregame_vote_score(yes_team_win_pct: float, home_p: float,
+                         home_l10: str, away_l10: str,
+                         home_home_record: str, away_road_record: str,
+                         h2h_series: str | None, line_movement: float,
+                         game: dict) -> tuple[int, str]:
+    """
+    Compute a 0–6 winner-prediction score for the YES team in a pre-game market.
+
+    Signals:
+      +2  Bookmaker implied probability > 0.55  (strong favorite)
+      +1  Better L10 form (more wins in last 10 games)
+      +1  Better venue win% (home team's home record vs away team's road record)
+      +1  H2H season series leader
+      +1  Opening line moved ≥0.03 toward this team
+
+    Returns (score, detail_string).
+    """
+    yes_is_home = abs(yes_team_win_pct - home_p) < 0.005
+    score = 0
+    parts = []
+
+    # 1. Bookmaker implied probability > 0.55 (+2 — strong favorite signal)
+    if yes_team_win_pct > 0.55:
+        score += 2
+        parts.append(f"fav({yes_team_win_pct:.2f})")
+
+    # 2. Better L10 form (+1)
+    yes_l10 = home_l10 if yes_is_home else away_l10
+    opp_l10 = away_l10 if yes_is_home else home_l10
+    y_wins = _parse_l10_wins(yes_l10)
+    o_wins = _parse_l10_wins(opp_l10)
+    if y_wins is not None and o_wins is not None and y_wins > o_wins:
+        score += 1
+        parts.append(f"L10({yes_l10}>{opp_l10})")
+
+    # 3. Better venue win% (+1)
+    yes_venue = home_home_record if yes_is_home else away_road_record
+    opp_venue = away_road_record if yes_is_home else home_home_record
+    y_wp = _parse_venue_wp(yes_venue)
+    o_wp = _parse_venue_wp(opp_venue)
+    if y_wp is not None and o_wp is not None and y_wp > o_wp:
+        score += 1
+        parts.append(f"venue({y_wp:.0%}>{o_wp:.0%})")
+
+    # 4. H2H season series leader (+1)
+    if h2h_series and "leads" in h2h_series.lower():
+        yes_abbr  = (game.get("home_abbr", "") if yes_is_home else game.get("away_abbr", "")).lower()
+        yes_words = [w.lower() for w in (game.get("home_team", "") if yes_is_home
+                     else game.get("away_team", "")).split() if len(w) > 2]
+        if yes_abbr in h2h_series.lower() or any(w in h2h_series.lower() for w in yes_words):
+            score += 1
+            parts.append("h2h")
+
+    # 5. Line movement toward YES team (+1)
+    if yes_is_home and line_movement >= 0.03:
+        score += 1
+        parts.append(f"line+{line_movement:.2f}")
+    elif not yes_is_home and line_movement <= -0.03:
+        score += 1
+        parts.append(f"line{line_movement:.2f}")
+
+    return score, (", ".join(parts) if parts else "no signals")
 
 
 def _no_trade(reason: str, yes_ask: float, sport_label: str, title: str) -> dict:

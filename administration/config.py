@@ -69,17 +69,17 @@ NUM_SLOTS = len(SLOTS)  # 4 — BTC, MLB, NBA, NHL
 # --- Non-crypto slot settings ---
 MARKET_EVAL_INTERVAL_SECS  = 60    # Poll sports slots every 60s — faster in-game edge capture
 # Sports close_time is weeks away (settlement); game_date_filter (ticker date) is used instead.
-SPORTS_EDGE_MIN            = 0.10  # Need ≥10% edge over Kalshi YES price to enter
-                                   # Math: min profitable edge (fees only) ≈ 0.018; 0.10 gives ~16% ROI
-                                   # Pre-game backed by Pinnacle odds (±2-3% error) → 0.10 is reliable
-                                   # In-game backed by Gaussian model (±5-8% error) → 0.10 leaves meaningful cushion
-SPORTS_CONTRACT_PRICE_MIN  = 0.20  # In-game price floor (live favorites can be 0.80+ and still have edge)
+SPORTS_EDGE_MIN            = 0.07  # In-game edge threshold (lowered from 0.10 — trade more often)
+SPORTS_PREGAME_EDGE_MIN    = 0.05  # Pre-game edge when vote score ≥ SPORTS_PREGAME_VOTE_MIN
+SPORTS_PREGAME_VOTE_MIN    = 4     # Min winner-prediction votes (out of 6) to unlock lower pre-game threshold
+                                   # Votes: implied_prob>0.55(+2), L10(+1), venue_record(+1), H2H(+1), line_move(+1)
+SPORTS_CONTRACT_PRICE_MIN  = 0.20  # In-game price floor
 SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game price ceiling
-SPORTS_PREGAME_PRICE_MIN   = 0.40  # Pre-game floor — underdogs below 0.40 rarely have enough edge
-SPORTS_PREGAME_PRICE_MAX   = 0.70  # Pre-game ceiling — favorites above 0.70 need p≥0.80 to get 0.10 edge
+SPORTS_PREGAME_PRICE_MIN   = 0.35  # Pre-game floor (widened from 0.40 for more pre-game trades)
+SPORTS_PREGAME_PRICE_MAX   = 0.70  # Pre-game ceiling
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
 SPORTS_MAX_GAMES_PER_SLOT  = 5     # Max unique game matchups per sports slot per day
-SPORTS_MAX_TRADES_PER_GAME = 1     # One trade per game matchup — no re-entries ever
+SPORTS_MAX_TRADES_PER_GAME = 2     # Max trades per game matchup (raised from 1 — allows second in-game entry)
 SPORTS_DAILY_BUDGET_PCT    = 0.75  # Each sport slot spends up to 75% of its slot capital per day
 INGAME_STALE_MARKET_SECS   = 600   # Skip in-game market if Kalshi YES price unchanged >10 min
 MARKET_MAX_CLOSE_HOURS     = 48.0  # Sports markets: look 48h ahead — covers tomorrow's full schedule

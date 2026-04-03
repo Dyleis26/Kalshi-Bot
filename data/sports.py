@@ -67,14 +67,17 @@ def get_games(espn_sport: str) -> list[dict]:
         if now_ts - entry["_ts"] < CACHE_TTL_SECS:
             return entry["games"]
 
-    now_utc   = datetime.now(timezone.utc)
-    today_str    = now_utc.strftime("%Y%m%d")
-    tomorrow_str = (now_utc + timedelta(days=1)).strftime("%Y%m%d")
+    now_utc      = datetime.now(timezone.utc)
+    yesterday_str = (now_utc - timedelta(days=1)).strftime("%Y%m%d")
+    today_str     = now_utc.strftime("%Y%m%d")
+    tomorrow_str  = (now_utc + timedelta(days=1)).strftime("%Y%m%d")
 
     all_games = []
     seen_ids  = set()
 
-    for date_str in [today_str, tomorrow_str]:
+    # Fetch yesterday too — late US evening games (10 PM ET) are still listed under
+    # yesterday's UTC date during the 00:00–04:00 UTC window while they're live.
+    for date_str in [yesterday_str, today_str, tomorrow_str]:
         try:
             url  = f"{ESPN_BASE}/{espn_sport}/scoreboard"
             resp = requests.get(url, params={"dates": date_str}, timeout=10)

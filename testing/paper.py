@@ -58,7 +58,7 @@ class Trader:
 
     def __init__(self, live: bool = False, starting_balance: float = STARTING_BALANCE):
         self.live      = live
-        self.portfolio = Portfolio.load(_PORTFOLIO_STATE_FILE, starting_balance)
+        self.portfolio = Portfolio(starting_balance)  # always fresh on restart
         self.monitor   = Monitor()
         self.discord   = Discord(paper=not live)
         self.trade_log = TradeLog(mode="live" if live else "paper")

@@ -111,75 +111,19 @@ class Trader:
 
         # One-trade-per-window/market: stores the last traded ticker per slot (crypto: datetime; others: unused)
         self._last_trade_key: dict = {k: None for k in SLOTS}
-        # Restore last BTC window from disk — prevents backfill candle re-entering the same window on restart
-        try:
-            with open(_TRADE_STATE_FILE) as _f:
-                _state = json.load(_f)
-                _iso = _state.get("BTC")
-                if _iso:
-                    _ts = datetime.fromisoformat(_iso)  # tz-naive
-                    if (datetime.now(timezone.utc).replace(tzinfo=None) - _ts).total_seconds() < 900:
-                        self._last_trade_key["BTC"] = _ts
-                        logger.info(f"Restored last BTC window from disk: {_ts.strftime('%H:%M')}")
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            logger.warning(f"Could not restore BTC trade state from disk: {exc}")
+        # Session is always fresh on restart — no state restored from disk
         # Accumulates every ticker traded this session per slot
         self._traded_tickers: dict = {k: set() for k in SLOTS}
         # In-game re-entry cooloff: {game_key: last_entry_monotonic_time}
         self._ingame_trade_times: dict = {}
         # Per-game daily trade count: {game_key: count} — resets at UTC midnight
         self._game_trade_counts: dict = {}
-        # Restore sports game counts and budget spend from disk (same UTC day only)
-        # Prevents duplicate trades on the same game after a restart with open positions
-        try:
-            with open(_SPORTS_STATE_FILE) as _f:
-                _ss = json.load(_f)
-            if _ss.get("date_utc") == datetime.now(timezone.utc).date().isoformat():
-                _gb = _ss.get("games_bet", {})
-                _bs = _ss.get("budget_spent", {})
-                _gc = _ss.get("game_counts", {})
-                _bsnap = _ss.get("budget_snap", {})
-                for _k in _sports_slots:
-                    if _k in _gb:
-                        self._sport_games_bet[_k] = int(_gb[_k])
-                    if _k in _bs:
-                        self._sport_budget_spent[_k] = float(_bs[_k])
-                    if _k in _bsnap:
-                        self._sport_budget_snap[_k] = float(_bsnap[_k])
-                self._game_trade_counts = {k: int(v) for k, v in _gc.items()}
-                logger.info(f"Restored sports state from disk: games_bet={self._sport_games_bet} "
-                            f"budget_spent={self._sport_budget_spent}")
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            logger.warning(f"Could not restore sports state from disk: {exc}")
 
         # Correlated-sweep protection
         self._consec_losses:        dict = {k: 0 for k in SLOTS}
         self._tracked_windows:      dict = {}
         self._sweep_cooloff_window       = None  # skip BTC trades in this 15M window
 
-        # Restore session stats and consecutive-loss counters from disk (same UTC day only)
-        try:
-            with open(_SESSION_STATE_FILE) as _f:
-                _sess = json.load(_f)
-            if _sess.get("date_utc") == datetime.now(timezone.utc).date().isoformat():
-                self.session_wins   = int(_sess.get("session_wins", 0))
-                self.session_losses = int(_sess.get("session_losses", 0))
-                self.session_pnl    = float(_sess.get("session_pnl", 0.0))
-                for _k, _v in _sess.get("consec_losses", {}).items():
-                    if _k in self._consec_losses:
-                        self._consec_losses[_k] = int(_v)
-                logger.info(
-                    f"Restored session state: {self.session_wins}W-{self.session_losses}L "
-                    f"pnl=${self.session_pnl:+.2f} consec={self._consec_losses}"
-                )
-        except FileNotFoundError:
-            pass
-        except Exception as _exc:
-            logger.warning(f"Could not restore session state: {_exc}")
 
         # Last non-crypto poll timestamp
         self._last_market_poll = 0.0

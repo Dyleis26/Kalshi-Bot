@@ -276,6 +276,6 @@ def evaluate(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
         "macd_bias":     macd_bias(macd_val, price),
         "streak_bias":   streak_b,
         "momentum_bias": momentum_bias(mom_val),
-        "vwap_bias":     "neutral",
+        "vwap_bias":     vwap_bias(price, vwap_val),
         "bb_bias":       bollinger(df_15m),
     }

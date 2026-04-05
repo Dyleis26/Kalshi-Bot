@@ -343,6 +343,7 @@ class Trader:
 
         if direction == NONE:
             logger.info(f"BTC: no trade — {decision['reason']}")
+            self._release_trade_slot("BTC")
             return
 
         t = threading.Thread(
@@ -1162,7 +1163,7 @@ class Trader:
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
-                self._consec_losses[slot_key] = min(self._consec_losses[slot_key] + 1, 10)
+                self._consec_losses[slot_key] = min(self._consec_losses[slot_key] + 1, MAX_LOSING_STREAK)
             log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl,
                       confidence_pct=confidence_pct, slot_type=slot_type, market_label=market_label)
             self._save_session_state()
@@ -1301,7 +1302,7 @@ class Trader:
                 s_wins, s_losses, s_pnl = self.session_wins, self.session_losses, self.session_pnl
                 port_total   = self.portfolio.total
                 port_summary = self.portfolio.summary()
-                self._consec_losses[slot_key] = min(self._consec_losses[slot_key] + 1, 10)
+                self._consec_losses[slot_key] = min(self._consec_losses[slot_key] + 1, MAX_LOSING_STREAK)
                 if settlement_open is not None and slot_type == "crypto":
                     _wr = self._tracked_windows.setdefault(
                         settlement_open, {"wins": 0, "losses": 0}

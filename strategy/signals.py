@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import administration.config as cfg
-from administration.config import RSI_PERIOD, STREAK_LENGTH
+from administration.config import RSI_PERIOD, STREAK_LENGTH, RSI_ENTRY_PERIOD, RSI_ENTRY_OB, RSI_ENTRY_OS
 
 
 # ------------------------------------------------------------------ #
@@ -196,31 +196,56 @@ def streak(df_15m: pd.DataFrame, length: int = 2) -> str:
     return "neutral"
 
 
+def rsi9_bias(df_15m: pd.DataFrame) -> tuple[float, str]:
+    """
+    RSI(9) mean-reversion entry signal.
+
+    RSI(9) >= RSI_ENTRY_OB (60) → overbought → expect pullback → 'bear'
+    RSI(9) <= RSI_ENTRY_OS (40) → oversold   → expect bounce  → 'bull'
+    Otherwise                                                  → 'neutral'
+
+    Returns (rsi9_value, bias_string).
+    """
+    ser = _rsi_series(df_15m, RSI_ENTRY_PERIOD)
+    val = float(ser.iloc[-1])
+    if np.isnan(val):
+        return 50.0, "neutral"
+    val = round(val, 4)
+    if val >= RSI_ENTRY_OB:
+        return val, "bear"
+    if val <= RSI_ENTRY_OS:
+        return val, "bull"
+    return val, "neutral"
+
+
 def evaluate(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
     """
-    Run the two core signals on 15m candles and return a snapshot.
+    Run all signals on 15m candles and return a snapshot.
 
-    Strategy: RSI slope + MACD on 15m data, with VWAP as an overextension gate.
-
-    Both RSI slope and MACD run on df_15m so they respond to the current
-    15-minute window rather than the hourly trend (which lags by 45–60 min).
+    Primary entry signal: RSI(9) mean-reversion (OB=60/OS=40).
+    Secondary signals kept for logging and reference.
 
     Returns:
         {
-            "rsi":           float,  # latest RSI(14) value on 15m
-            "macd":          float,  # latest MACD histogram on 15m
-            "momentum":      float,  # 3-bar momentum on 15m (kept for logging)
-            "vwap":          float,  # 24h rolling VWAP on 15m
+            "rsi9":          float,  # RSI(9) value — primary entry signal
+            "rsi9_bias":     'bull'|'bear'|'neutral',  # RSI(9) OB/OS direction
+            "rsi":           float,  # RSI(14) value (kept for logging)
+            "macd":          float,  # MACD histogram (kept for logging)
+            "momentum":      float,  # 3-bar momentum (kept for logging)
+            "vwap":          float,  # 24h rolling VWAP
             "price":         float,  # latest 15m close
-            "rsi_bias":      'bull'|'bear'|'neutral',  # RSI slope over last 3 bars
-            "macd_bias":     'bull'|'bear'|'neutral',  # MACD histogram sign
-            "momentum_bias": 'bull'|'bear'|'neutral',  # kept for logging only
-            "vwap_bias":     'neutral',                # VWAP used as gate in base.py, not a vote
-            "bb_bias":       'bull'|'bear'|'neutral',  # kept for logging only
+            "rsi_bias":      'bull'|'bear'|'neutral',  # RSI(14) slope (kept for logging)
+            "macd_bias":     'bull'|'bear'|'neutral',  # MACD histogram sign (logging)
+            "streak_bias":   'bull'|'bear'|'neutral',  # streak signal (logging)
+            "momentum_bias": 'bull'|'bear'|'neutral',  # kept for logging
+            "vwap_bias":     'neutral',
+            "bb_bias":       'bull'|'bear'|'neutral',  # kept for logging
         }
     """
-    # RSI slope on 15m — captures the current 15-min momentum of RSI,
-    # not the lagging hourly trend.
+    # RSI(9) — primary entry signal
+    rsi9_val, rsi9_b = rsi9_bias(df_15m)
+
+    # RSI(14) slope — kept for logging / reference
     rsi_ser = _rsi_series(df_15m)
     rsi_raw = float(rsi_ser.iloc[-1])
     rsi_val = round(rsi_raw if not np.isnan(rsi_raw) else 50.0, 4)
@@ -229,24 +254,19 @@ def evaluate(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
     if len(df_15m) >= RSI_PERIOD + lookback:
         rsi_prev = float(rsi_ser.iloc[-lookback])
         slope    = rsi_val - rsi_prev
-        if slope > 2.0:
-            rsi_b = "bull"
-        elif slope < -2.0:
-            rsi_b = "bear"
-        else:
-            rsi_b = "neutral"
+        rsi_b = "bull" if slope > 2.0 else ("bear" if slope < -2.0 else "neutral")
     else:
         rsi_b = "neutral"
 
-    # MACD on 15m — histogram sign captures medium-term 15m trend direction.
     macd_val = macd(df_15m)
     mom_val  = momentum(df_15m)
     vwap_val = vwap(df_15m)
     price    = float(df_15m["close"].iloc[-1])
-
     streak_b = streak(df_15m, STREAK_LENGTH)
 
     return {
+        "rsi9":          rsi9_val,
+        "rsi9_bias":     rsi9_b,
         "rsi":           rsi_val,
         "macd":          macd_val,
         "momentum":      mom_val,
@@ -256,6 +276,6 @@ def evaluate(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
         "macd_bias":     macd_bias(macd_val, price),
         "streak_bias":   streak_b,
         "momentum_bias": momentum_bias(mom_val),
-        "vwap_bias":     "neutral",   # not used as a vote
+        "vwap_bias":     "neutral",
         "bb_bias":       bollinger(df_15m),
     }

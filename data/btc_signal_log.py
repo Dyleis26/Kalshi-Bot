@@ -4,24 +4,26 @@ btc_signal_log.py — BTC 15-minute signal history logger.
 Records every BTC window evaluation to a CSV regardless of whether a trade
 fires. This builds a complete signal history for strategy validation:
 
-  1. Measure true win-rate of streak signal (not just traded windows)
-  2. Check MACD filter effectiveness — how many signals does it block?
-  3. Validate RSI/momentum values at trade vs no-trade windows
-  4. Post-hoc label outcomes by joining with BTCUSD_15m.csv on window
+  1. Measure true win-rate of RSI(9) signal (not just traded windows)
+  2. Validate RSI(9) extremity vs actual outcome — does deeper OB/OS → better WR?
+  3. Post-hoc label outcomes by joining with BTCUSD_15m.csv on window
+  4. Track RSI(14) and MACD alongside RSI(9) for comparison
 
 CSV: data/storage/btc_signal_history.csv
 
 Columns:
   window         — UTC window start time "YYYY-MM-DD HH:MM"
-  streak_bias    — bull / bear / neutral
+  rsi9           — RSI(9) value — primary entry signal
+  rsi9_bias      — bull / bear / neutral  (OB=60/OS=40)
+  streak_bias    — bull / bear / neutral  (legacy, kept for comparison)
   macd_bias      — bull / bear / neutral
-  rsi            — RSI value (float)
+  rsi            — RSI(14) value (kept for reference)
   macd           — MACD histogram value (float)
   momentum       — momentum value (float)
   vwap_diff      — price - VWAP (float)
   direction      — LONG / SHORT / NONE (what the strategy decided)
   traded         — 1 if a trade was placed this window, 0 otherwise
-  confidence_pct — 0 / 50 / 100
+  confidence_pct — scaled by RSI extremity (0–99%)
   reason         — strategy reason string
 """
 
@@ -34,7 +36,7 @@ STORAGE_DIR  = os.path.join(os.path.dirname(__file__), "storage")
 SIGNAL_FILE  = os.path.join(STORAGE_DIR, "btc_signal_history.csv")
 
 COLUMNS = [
-    "window", "streak_bias", "macd_bias",
+    "window", "rsi9", "rsi9_bias", "streak_bias", "macd_bias",
     "rsi", "macd", "momentum", "vwap_diff",
     "direction", "traded", "confidence_pct", "reason",
 ]
@@ -71,6 +73,8 @@ def log_window(decision: dict, traded: bool = False):
         vwap    = float(signals.get("vwap", 0) or 0)
         row = {
             "window":         win,
+            "rsi9":           round(float(signals.get("rsi9", 50) or 50), 4),
+            "rsi9_bias":      signals.get("rsi9_bias", "neutral"),
             "streak_bias":    signals.get("streak_bias", ""),
             "macd_bias":      signals.get("macd_bias", ""),
             "rsi":            round(float(signals.get("rsi", 0) or 0), 4),

@@ -69,11 +69,17 @@ NUM_SLOTS = len(SLOTS)  # 4 — BTC, MLB, NBA, NHL
 # --- Non-crypto slot settings ---
 MARKET_EVAL_INTERVAL_SECS  = 30    # Poll sports slots every 30s — faster in-game lag capture
 # Sports close_time is weeks away (settlement); game_date_filter (ticker date) is used instead.
-SPORTS_EDGE_MIN            = 0.12  # In-game LONG edge threshold
+SPORTS_EDGE_MIN            = 0.12  # In-game LONG edge threshold (edge-only tier)
 SPORTS_SHORT_EDGE_MIN      = 0.20  # In-game SHORT requires larger edge — higher confidence bar
-SPORTS_PREGAME_EDGE_MIN    = 0.10  # Pre-game LONG edge when vote score ≥ SPORTS_PREGAME_VOTE_MIN
-SPORTS_PREGAME_VOTE_MIN    = 5     # Min winner-prediction votes (out of 6) to unlock pre-game threshold
-                                   # Votes: implied_prob>0.55(+2), L10(+1), venue_record(+1), H2H(+1), line_move(+1)
+# Pre-game entry: three-tier system — confidence > vote-backed > edge-only
+# Tier 1 — Confidence pick:  votes ≥ SPORTS_PREGAME_VOTE_CONFIDENCE AND model > 52% → edge ≥ 0.02
+# Tier 2 — Vote-backed:      votes ≥ SPORTS_PREGAME_VOTE_MIN                       → edge ≥ 0.07
+# Tier 3 — Edge-only:        any votes                                              → edge ≥ 0.12
+SPORTS_PREGAME_VOTE_CONFIDENCE   = 4     # High-confidence tier: model picks winner, minimal edge required
+SPORTS_PREGAME_CONFIDENCE_EDGE   = 0.02  # Edge floor for confidence-tier trades (model just needs to beat Kalshi)
+SPORTS_PREGAME_EDGE_MIN          = 0.07  # Edge threshold for vote-backed tier (3+ votes)
+SPORTS_PREGAME_VOTE_MIN          = 3     # Min votes (out of 6) to unlock vote-backed threshold
+                                         # Votes: implied_prob>0.55(+2), L10(+1), venue_record(+1), H2H(+1), line_move(+1)
 SPORTS_PREGAME_SHORT       = False # Disable pre-game SHORT — only LONG on confident pre-game winners
 SPORTS_SHORT_MAX_NO_PRICE  = 0.65  # Block SHORT if NO ask > 0.65 — paying >65¢ for max $0.35 return is bad math
 SPORTS_CONTRACT_PRICE_MIN  = 0.35  # In-game price floor (raised from 0.20 — no more extreme underdog buys)

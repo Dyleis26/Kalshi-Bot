@@ -27,6 +27,7 @@ from administration.config import (
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX,
     SPORTS_EDGE_MIN, SPORTS_SHORT_EDGE_MIN,
     SPORTS_PREGAME_EDGE_MIN, SPORTS_PREGAME_VOTE_MIN,
+    SPORTS_PREGAME_VOTE_CONFIDENCE, SPORTS_PREGAME_CONFIDENCE_EDGE,
     SPORTS_PREGAME_SHORT, SPORTS_SHORT_MAX_NO_PRICE,
     SPORTS_CONTRACT_PRICE_MIN, SPORTS_CONTRACT_PRICE_MAX,
     SPORTS_PREGAME_PRICE_MIN, SPORTS_PREGAME_PRICE_MAX,
@@ -353,8 +354,15 @@ class SportsStrategy:
                 f"Sports [{sport_label}]: pre-game votes {vote_score}/6 — {vote_detail}"
             )
 
-        # Edge threshold: lower when vote score confirms LONG direction pre-game
-        if not is_live and vote_score >= SPORTS_PREGAME_VOTE_MIN and edge > 0:
+        # Three-tier pre-game threshold — confidence is the primary signal:
+        #   Tier 1 (confidence pick): 4+ votes AND model > 52% → needs just 0.02 edge
+        #   Tier 2 (vote-backed):     3+ votes                  → needs 0.07 edge
+        #   Tier 3 (edge-only):       any                       → needs 0.12 edge
+        using_confidence_tier = False
+        if not is_live and vote_score >= SPORTS_PREGAME_VOTE_CONFIDENCE and yes_team_win_pct > 0.52:
+            active_threshold = SPORTS_PREGAME_CONFIDENCE_EDGE
+            using_confidence_tier = True
+        elif not is_live and vote_score >= SPORTS_PREGAME_VOTE_MIN and edge > 0:
             active_threshold = SPORTS_PREGAME_EDGE_MIN
         else:
             active_threshold = SPORTS_EDGE_MIN
@@ -383,12 +391,18 @@ class SportsStrategy:
             src += " [LAG]"
         if edge >= active_threshold:
             direction = LONG
-            reason = (
-                f"edge={edge:+.2f} ({src}, "
-                f"p={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f}) — buying YES"
-            )
-            if not is_live and vote_score > 0:
-                reason += f" | votes {vote_score}/6"
+            if using_confidence_tier:
+                reason = (
+                    f"confidence pick — votes {vote_score}/6, "
+                    f"p={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f} edge={edge:+.2f}"
+                )
+            else:
+                reason = (
+                    f"edge={edge:+.2f} ({src}, "
+                    f"p={yes_team_win_pct:.2f} Kalshi={yes_ask:.2f}) — buying YES"
+                )
+                if not is_live and vote_score > 0:
+                    reason += f" | votes {vote_score}/6"
         elif edge <= -active_threshold:
             # Fix #2: don't buy NO when our own model says YES team wins.
             if yes_team_win_pct > 0.50:

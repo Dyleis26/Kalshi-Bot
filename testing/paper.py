@@ -380,31 +380,7 @@ class Trader:
             "equity_change": decision.get("equity_change"),
         })
 
-        # 07:00 UTC blackout: European cash open floods volume and invalidates overnight signals.
-        # Data shows 0% win rate and -$42.70 PnL in this hour across all sessions.
         _now_cw = datetime.now(timezone.utc)
-        if _now_cw.hour == 7:
-            logger.info(f"{slot_key}: skipped — 07:00 UTC blackout (European open volatility)")
-            self._release_trade_slot(slot_key)
-            return
-
-        # BTC crash regime filter: if BTC has dropped >3% over the last 6 hours, signals built
-        # on pre-crash data are unreliable. All-time record: <$67k regime 42% WR, -$96 PnL.
-        try:
-            _df1h = self.btc_state.get("df_1h")
-            if _df1h is not None and len(_df1h) >= 7:
-                _close_now  = float(_df1h["close"].iloc[-1])
-                _close_6h   = float(_df1h["close"].iloc[-7])
-                _pct_change = (_close_now - _close_6h) / _close_6h
-                if _pct_change <= -0.03:
-                    logger.info(
-                        f"{slot_key}: skipped — BTC crash regime "
-                        f"({_pct_change:+.2%} over 6h, signals unreliable)"
-                    )
-                    self._release_trade_slot(slot_key)
-                    return
-        except Exception:
-            pass
 
         _cw_min = _now_cw.minute - (_now_cw.minute % 15)
         current_window = _now_cw.replace(minute=_cw_min, second=0, microsecond=0, tzinfo=None)
@@ -456,38 +432,12 @@ class Trader:
         is_contrarian    = (market_direction != direction)
 
         if is_contrarian:
-            price_above_vwap = signals["price"] > signals["vwap"]
-            if direction == SHORT and not price_above_vwap:
-                logger.info(
-                    f"{slot_key}: contrarian SHORT skipped — price below VWAP "
-                    f"({signals['price']:.2f} < {signals['vwap']:.2f}), no mean-reversion setup"
-                )
-                self._release_trade_slot(slot_key)
-                return
-            if direction == LONG and price_above_vwap:
-                logger.info(
-                    f"{slot_key}: contrarian LONG skipped — price above VWAP "
-                    f"({signals['price']:.2f} > {signals['vwap']:.2f}), no mean-reversion setup"
-                )
-                self._release_trade_slot(slot_key)
-                return
-
-            # Block only when RSI slope actively opposes the direction; neutral RSI passes.
-            rsi_opposes = (
-                (direction == SHORT and signals["rsi_bias"] == "bull") or
-                (direction == LONG  and signals["rsi_bias"] == "bear")
-            )
-            if rsi_opposes:
-                logger.info(
-                    f"{slot_key}: contrarian {direction.upper()} skipped — "
-                    f"RSI slope ({signals['rsi_bias']}) actively opposes direction"
-                )
-                self._release_trade_slot(slot_key)
-                return
-
+            # RSI(9) mean-reversion is inherently contrarian — we SHORT when overbought
+            # (price trending up) and LONG when oversold (price trending down).
+            # No additional filter needed; the RSI(9) OB/OS level IS the confirmation.
             logger.info(
                 f"{slot_key}: contrarian — signal={direction} vs market yes={yes_price:.2f} "
-                f"(buying {'YES at discount' if direction == LONG else 'NO at discount'})"
+                f"(RSI9={signals['rsi9']:.1f}, {'YES at discount' if direction == LONG else 'NO at discount'})"
             )
 
         vwap_pos   = "above" if signals["price"] > signals["vwap"] else "below"
@@ -495,7 +445,7 @@ class Trader:
         if signals.get("equity_change") is not None:
             equity_str = f" | equity={signals['equity_change']:+.2%}({signals['equity_bias']})"
         logger.info(
-            f"{slot_key}: signal-context | rsi={signals['rsi']:.1f}({signals['rsi_bias']}) | "
+            f"{slot_key}: signal-context | rsi9={signals['rsi9']:.1f}({signals['rsi9_bias']}) | "
             f"price {vwap_pos} vwap ({signals['price']:.2f} vs {signals['vwap']:.2f}){equity_str}"
         )
 
@@ -507,9 +457,13 @@ class Trader:
         with self._lock:
             slot_capital = self.portfolio.capital * SLOT_CAPITAL_PCT
             consec = self._consec_losses[slot_key]
-        if confidence_pct >= 75.0:
+        # RSI(9) confidence tiers (formula maps RSI extremity to 1–99%):
+        #   RSI 60–65 / 40–35 → conf  1–25% → LOW  (10%)
+        #   RSI 65–75 / 35–25 → conf 25–50% → MID  (15%)
+        #   RSI 75+   / 25-   → conf 50–99% → HIGH (20%)
+        if confidence_pct >= 50.0:
             btc_pct = BTC_BET_PCT_HIGH
-        elif confidence_pct >= 50.0:
+        elif confidence_pct >= 25.0:
             btc_pct = BTC_BET_PCT_MID
         else:
             btc_pct = BTC_BET_PCT_LOW

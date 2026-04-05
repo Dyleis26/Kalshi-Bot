@@ -3,7 +3,7 @@ import pandas as pd
 from administration.portfolio import Portfolio
 from administration.config import (
     STARTING_BALANCE, KALSHI_TAKER_FEE, KALSHI_MAKER_FEE,
-    SLOT_CAPITAL_PCT, BET_PCT_OF_SLOT,
+    SLOT_CAPITAL_PCT, BTC_BET_PCT_MID, BTC_MAX_BET,
 )
 from strategy.base import Strategy, LONG, SHORT, NONE
 from testing.metrics import calculate, print_summary
@@ -85,9 +85,9 @@ class Backtest:
             if direction == NONE:
                 continue
 
-            # Simulate trade — use same dynamic sizing as paper.py
+            # Simulate trade — BTC sizing: MID confidence tier (15% of slot capital, capped at BTC_MAX_BET)
             contract_price = self._estimate_contract_price(direction, candle)
-            size = round(self.portfolio.capital * SLOT_CAPITAL_PCT * BET_PCT_OF_SLOT, 2)
+            size = round(min(self.portfolio.capital * SLOT_CAPITAL_PCT * BTC_BET_PCT_MID, BTC_MAX_BET), 2)
             if math.floor(size / contract_price) < 1:
                 skipped += 1
                 continue

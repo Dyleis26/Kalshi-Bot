@@ -89,16 +89,4 @@ class Strategy:
         }
 
 
-def _count_streak(closes) -> int:
-    """Count how many consecutive candles moved in the same direction as the most recent."""
-    if len(closes) < 2:
-        return 0
-    going_up = closes[-1] > closes[-2]
-    count = 1
-    for i in range(len(closes)-2, 0, -1):
-        if (closes[i] > closes[i-1]) == going_up:
-            count += 1
-        else:
-            break
-    return count
 

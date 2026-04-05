@@ -117,8 +117,8 @@ VWAP_MIN_PCT = 0.002    # Block trade if price is >0.20% from VWAP (already over
 # When RSI(9) ≥ OB → overbought → bet DOWN (SHORT)
 # When RSI(9) ≤ OS → oversold  → bet UP   (LONG)
 RSI_ENTRY_PERIOD = 9    # Fast RSI — responds quickly to 15-min price swings
-RSI_ENTRY_OB     = 60   # Overbought threshold: RSI ≥ 60 → SHORT
-RSI_ENTRY_OS     = 40   # Oversold threshold:  RSI ≤ 40 → LONG
+RSI_ENTRY_OB     = 55   # Overbought threshold: RSI ≥ 55 → SHORT
+RSI_ENTRY_OS     = 45   # Oversold threshold:  RSI ≤ 45 → LONG
 
 MIN_CONFIDENCE = 1    # Minimum confidence to place trade
 FORCE_TRADE = False

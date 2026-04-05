@@ -495,10 +495,20 @@ class SportsStrategy:
 
         logger.info(f"Sports [{sport_label}]: {reason}")
 
+        # Confidence score blends edge magnitude and vote conviction:
+        #   Pre-game: 50% from vote score (0–6) + 50% from edge (capped at 30¢)
+        #   In-game:  edge-only (no vote system for live markets)
+        if not is_live and vote_score > 0:
+            vote_component = (vote_score / 6) * 50
+            edge_component = min(abs(edge) * 100, 30) * (50 / 30)
+            _conf_pct = round(min(vote_component + edge_component, 99.0), 1)
+        else:
+            _conf_pct = round(min(abs(edge) * 100, 99.0), 1)
+
         return {
             "direction":         direction,
             "confidence":        round(abs(edge), 4),
-            "confidence_pct":    round(min(abs(edge) * 100, 99.0), 1),
+            "confidence_pct":    _conf_pct,
             "external_prob":     round(yes_team_win_pct, 4),
             "kalshi_yes":        round(yes_ask, 4),
             "edge":              round(edge, 4),
@@ -513,6 +523,10 @@ class SportsStrategy:
             "game_clock":        game.get("clock", ""),
             "score_validated":   game.get("score_validated", False),
             "prob_source":       src,
+            # Vote conviction data (pre-game only)
+            "vote_score":        vote_score,
+            "vote_detail":       vote_detail,
+            "confidence_tier":   "confidence" if using_confidence_tier else ("vote" if vote_score >= SPORTS_PREGAME_VOTE_MIN else "edge"),
             # Team records and form
             "home_record":       home_record,
             "away_record":       away_record,

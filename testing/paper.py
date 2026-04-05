@@ -697,6 +697,15 @@ class Trader:
                 direction=direction,
                 traded=False,
                 prob_source=decision.get("prob_source", ""),
+                confidence_pct=decision.get("confidence_pct", 0.0),
+                vote_score=decision.get("vote_score", 0),
+                vote_detail=decision.get("vote_detail", ""),
+                confidence_tier=decision.get("confidence_tier", ""),
+                home_record=decision.get("home_record", ""),
+                away_record=decision.get("away_record", ""),
+                home_l10=decision.get("home_l10", ""),
+                away_l10=decision.get("away_l10", ""),
+                h2h_series=decision.get("h2h_series", ""),
             )
 
             # Stale market guard (apply only to in-game sports markets)

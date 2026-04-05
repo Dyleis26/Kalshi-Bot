@@ -25,7 +25,9 @@ from data.team_stats import (
 )
 from administration.config import (
     CONTRACT_PRICE_MIN, CONTRACT_PRICE_MAX,
-    SPORTS_EDGE_MIN, SPORTS_PREGAME_EDGE_MIN, SPORTS_PREGAME_VOTE_MIN,
+    SPORTS_EDGE_MIN, SPORTS_SHORT_EDGE_MIN,
+    SPORTS_PREGAME_EDGE_MIN, SPORTS_PREGAME_VOTE_MIN,
+    SPORTS_PREGAME_SHORT, SPORTS_SHORT_MAX_NO_PRICE,
     SPORTS_CONTRACT_PRICE_MIN, SPORTS_CONTRACT_PRICE_MAX,
     SPORTS_PREGAME_PRICE_MIN, SPORTS_PREGAME_PRICE_MAX,
     ODDS_API_KEY,
@@ -40,6 +42,15 @@ NONE  = "none"
 # Tracks known OUT players per game so we can detect newly-scratched players
 # and trigger an Odds API cache refresh before the edge is computed.
 _known_out_players: dict = {}  # {"{home}|{away}": set_of_out_player_strings}
+
+# Fix #3: tracks YES-team score deficit per game across scans (for momentum filter).
+# {game_id: [yes_team_deficit, ...]}  — positive = YES team winning, negative = trailing.
+_game_deficit_history: dict = {}
+
+# Lag detection: tracks last known score_diff and Kalshi YES price per game.
+# When score changes but Kalshi price hasn't moved, a lag window is open.
+# {game_id: {"score_diff": int, "kalshi_yes": float}}
+_last_game_state: dict = {}
 
 # ESPN uses shortened abbreviations; some NHL API endpoints return longer codes.
 # Map ESPN abbr → NHL API abbr so standings lookups don't return empty dicts.
@@ -194,7 +205,7 @@ class SportsStrategy:
                 line_movement = odds_match.get("line_movement", 0.0) if odds_match else 0.0
 
         # Determine which team is the YES outcome
-        yes_team_win_pct = _resolve_yes_team_probability(
+        yes_team_win_pct, yes_is_home = _resolve_yes_team_probability(
             game, title, yes_sub, home_p=home_p, away_p=away_p
         )
         if yes_team_win_pct is None:
@@ -205,9 +216,6 @@ class SportsStrategy:
         if is_live and espn_sport == "basketball/nba":
             mom = get_nba_momentum(game.get("game_id", ""))
             if mom:
-                # Determine if the YES team is home or away
-                # Use the same resolution logic: yes_team_win_pct == home_p → YES is home
-                yes_is_home = abs(yes_team_win_pct - home_p) < 0.005
                 adj = mom["home_adj"] if yes_is_home else mom["away_adj"]
                 if adj != 0.0:
                     yes_team_win_pct = max(0.01, min(0.99, yes_team_win_pct + adj))
@@ -339,6 +347,7 @@ class SportsStrategy:
                 h2h_series=h2h_series,
                 line_movement=line_movement,
                 game=game,
+                yes_is_home=yes_is_home,
             )
             logger.info(
                 f"Sports [{sport_label}]: pre-game votes {vote_score}/6 — {vote_detail}"
@@ -350,7 +359,28 @@ class SportsStrategy:
         else:
             active_threshold = SPORTS_EDGE_MIN
 
+        # Lag detection: when score just changed but Kalshi price hasn't moved,
+        # a temporary mispricing window is open. Lower threshold by 1/3 to enter earlier.
+        lag_detected = False
+        if is_live:
+            game_id = game.get("game_id", "")
+            cur_score_diff = game.get("score_diff", 0)
+            last_state = _last_game_state.get(game_id)
+            if last_state is not None:
+                score_changed = cur_score_diff != last_state["score_diff"]
+                kalshi_flat   = abs(yes_ask - last_state["kalshi_yes"]) < 0.02
+                if score_changed and kalshi_flat and abs(edge) > 0.05:
+                    lag_detected = True
+                    active_threshold = round(active_threshold * 0.67, 3)
+                    logger.info(
+                        f"Sports [{sport_label}]: lag detected — score {last_state['score_diff']:+d}→{cur_score_diff:+d}, "
+                        f"Kalshi flat at {yes_ask:.2f} — threshold lowered to {active_threshold:.3f}"
+                    )
+            _last_game_state[game_id] = {"score_diff": cur_score_diff, "kalshi_yes": yes_ask}
+
         src = prob_source + momentum_tag
+        if lag_detected:
+            src += " [LAG]"
         if edge >= active_threshold:
             direction = LONG
             reason = (
@@ -360,6 +390,50 @@ class SportsStrategy:
             if not is_live and vote_score > 0:
                 reason += f" | votes {vote_score}/6"
         elif edge <= -active_threshold:
+            # Fix #2: don't buy NO when our own model says YES team wins.
+            if yes_team_win_pct > 0.50:
+                logger.info(
+                    f"Sports [{sport_label}]: model-direction conflict — "
+                    f"edge={edge:+.2f} but model p={yes_team_win_pct:.2f} > 0.50 — skip NO"
+                )
+                return _no_trade(
+                    f"model-direction conflict: edge={edge:+.2f} "
+                    f"(model p={yes_team_win_pct:.2f} agrees YES wins) — skip",
+                    yes_ask, sport_label, title
+                )
+
+            # Short-direction quality filters: focus on confident winners, not
+            # catching underdogs or fighting Kalshi on small margins.
+            no_ask_est = round(1.0 - yes_ask, 2)
+
+            # Block pre-game SHORTs entirely — only LONG on confirmed pre-game winners
+            if not is_live and not SPORTS_PREGAME_SHORT:
+                return _no_trade(
+                    f"pre-game SHORT disabled — only LONG on confirmed winners "
+                    f"(edge={edge:+.2f} p={yes_team_win_pct:.2f})",
+                    yes_ask, sport_label, title
+                )
+
+            # Block if NO price is too expensive — bad risk/reward
+            # (paying >65¢ for a max $1.00 return on an already-cheap NO)
+            if no_ask_est > SPORTS_SHORT_MAX_NO_PRICE:
+                return _no_trade(
+                    f"SHORT blocked — NO price {no_ask_est:.2f} > max {SPORTS_SHORT_MAX_NO_PRICE:.2f} "
+                    f"(bad risk/reward: pay {no_ask_est:.2f} to win {1-no_ask_est:.2f})",
+                    yes_ask, sport_label, title
+                )
+
+            # In-game SHORT requires larger edge than LONG
+            short_threshold = SPORTS_SHORT_EDGE_MIN
+            if lag_detected:
+                short_threshold = round(short_threshold * 0.67, 3)
+            if abs(edge) < short_threshold:
+                return _no_trade(
+                    f"SHORT edge {edge:+.2f} below in-game SHORT threshold ±{short_threshold} "
+                    f"(requires higher confidence than LONG)",
+                    yes_ask, sport_label, title
+                )
+
             direction = SHORT
             reason = (
                 f"edge={edge:+.2f} ({src}, "
@@ -374,22 +448,57 @@ class SportsStrategy:
             if not is_live:
                 reason += f" | votes {vote_score}/6"
 
+        # Fix #3: in-game momentum block for NBA/NHL LONG trades.
+        # If the YES team has trailed for 10+ consecutive scans AND the deficit
+        # is the same or worse, the market knows something the static model doesn't.
+        if (direction == LONG and is_live and
+                espn_sport in ("basketball/nba", "hockey/nhl")):
+            game_id = game.get("game_id", "")
+            if game_id:
+                # Determine YES team deficit: positive = winning, negative = trailing
+                yes_deficit = game.get("score_diff", 0) if yes_is_home else -game.get("score_diff", 0)
+
+                hist = _game_deficit_history.setdefault(game_id, [])
+                hist.append(yes_deficit)
+                if len(hist) > 20:
+                    hist.pop(0)
+
+                if len(hist) >= 10:
+                    recent = hist[-10:]
+                    all_trailing = all(d < 0 for d in recent)
+                    worsening = recent[-1] <= recent[0]  # deficit same or grew
+                    if all_trailing and worsening:
+                        logger.info(
+                            f"Sports [{sport_label}]: momentum block — "
+                            f"YES team trailing {abs(yes_deficit)} for 10+ scans "
+                            f"(deficit {recent[0]:+d} → {recent[-1]:+d})"
+                        )
+                        return _no_trade(
+                            f"momentum block: trailing {abs(yes_deficit)} for 10+ scans "
+                            f"({recent[0]:+d} → {recent[-1]:+d})",
+                            yes_ask, sport_label, title
+                        )
+
         logger.info(f"Sports [{sport_label}]: {reason}")
 
         return {
             "direction":         direction,
             "confidence":        round(abs(edge), 4),
-            "confidence_pct":    round(min(abs(edge) / 0.5 * 100, 100.0), 1),
+            "confidence_pct":    round(min(abs(edge) * 100, 99.0), 1),
             "external_prob":     round(yes_team_win_pct, 4),
             "kalshi_yes":        round(yes_ask, 4),
             "edge":              round(edge, 4),
             "reason":            reason,
             "market_label":      market_label,
             "is_ingame":         is_live,
+            "game_id":           game.get("game_id", ""),
+            "home_score":        game.get("score_home", 0),
+            "away_score":        game.get("score_away", 0),
             "game_score":        f"{game['score_home']}-{game['score_away']}",
             "game_period":       game.get("period", 0),
             "game_clock":        game.get("clock", ""),
             "score_validated":   game.get("score_validated", False),
+            "prob_source":       src,
             # Team records and form
             "home_record":       home_record,
             "away_record":       away_record,
@@ -409,12 +518,16 @@ class SportsStrategy:
 # ---------------------------------------------------------------------- #
 
 def _resolve_yes_team_probability(game: dict, title: str, yes_sub: str = "",
-                                   home_p: float = None, away_p: float = None) -> float | None:
+                                   home_p: float = None, away_p: float = None
+                                   ) -> tuple[float, bool] | tuple[None, None]:
     """
-    Determine which team is the YES outcome, then return the win probability for that team.
+    Determine which team is the YES outcome, then return (win_probability, yes_is_home).
 
     home_p / away_p: pre-computed probabilities (in-game model or ESPN pre-game).
     Falls back to game["home_win_pct"] / game["away_win_pct"] if not supplied.
+
+    Returns (probability, yes_is_home) so callers know which team YES represents
+    without having to compare floating-point probabilities (which is ambiguous at 50/50).
     """
     hp = home_p if home_p is not None else game["home_win_pct"]
     ap = away_p if away_p is not None else game["away_win_pct"]
@@ -429,9 +542,9 @@ def _resolve_yes_team_probability(game: dict, title: str, yes_sub: str = "",
         home_match = (home_abbr in sub_lower or any(w in sub_lower for w in home_words))
         away_match = (away_abbr in sub_lower or any(w in sub_lower for w in away_words))
         if home_match and not away_match:
-            return hp
+            return hp, True
         if away_match and not home_match:
-            return ap
+            return ap, False
 
     # Fallback: first team mentioned in title is YES
     title_lower = title.lower()
@@ -439,12 +552,14 @@ def _resolve_yes_team_probability(game: dict, title: str, yes_sub: str = "",
     away_pos = _first_mention(title_lower, [away_abbr] + away_words)
 
     if home_pos is None and away_pos is None:
-        return None
+        return None, None
     if home_pos is None:
-        return ap
+        return ap, False
     if away_pos is None:
-        return hp
-    return hp if home_pos <= away_pos else ap
+        return hp, True
+    if home_pos <= away_pos:
+        return hp, True
+    return ap, False
 
 
 def _first_mention(text: str, tokens: list) -> int | None:
@@ -516,7 +631,7 @@ def _pregame_vote_score(yes_team_win_pct: float, home_p: float,
                          home_l10: str, away_l10: str,
                          home_home_record: str, away_road_record: str,
                          h2h_series: str | None, line_movement: float,
-                         game: dict) -> tuple[int, str]:
+                         game: dict, yes_is_home: bool = True) -> tuple[int, str]:
     """
     Compute a 0–6 winner-prediction score for the YES team in a pre-game market.
 
@@ -529,7 +644,6 @@ def _pregame_vote_score(yes_team_win_pct: float, home_p: float,
 
     Returns (score, detail_string).
     """
-    yes_is_home = abs(yes_team_win_pct - home_p) < 0.005
     score = 0
     parts = []
 

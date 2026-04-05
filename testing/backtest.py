@@ -127,15 +127,18 @@ class Backtest:
 
     def _resolve_outcome(self, direction: str, candle_idx: int):
         """
-        Kalshi BTC 15M Up/Down: signals fire on close of candle i, trade
-        resolves on the NEXT candle (i+1). Compare next candle's close to open.
-        WIN if direction matches actual price movement of the next window.
-        """
-        candle = self.df_15m.iloc[candle_idx + 1]
-        open_price = candle["open"]
-        close_price = candle["close"]
+        Kalshi BTC 15M Up/Down: the market settles on whether BTC is HIGHER at
+        settlement than the reference price set when the market opened.
 
-        went_up = close_price > open_price
+        Reference ≈ close of candle i (the candle our signal fires on).
+        Settlement ≈ close of candle i+1 (end of the next 15-minute window).
+
+        WIN if close(i+1) > close(i) and direction == LONG, or vice-versa.
+        """
+        ref_price        = float(self.df_15m.iloc[candle_idx]["close"])
+        settlement_price = float(self.df_15m.iloc[candle_idx + 1]["close"])
+
+        went_up = settlement_price > ref_price
 
         if direction == LONG and went_up:
             return "win"

@@ -22,6 +22,7 @@ Cached 5 minutes.
 """
 
 import logging
+import time
 import requests
 from datetime import datetime, timezone
 
@@ -57,11 +58,24 @@ def _fetch_change(symbol: str, lookback_bars: int) -> float | None:
         result = data.get("chart", {}).get("result", [])
         if not result:
             return None
-        closes = result[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
-        closes = [c for c in closes if c is not None]
+        res0       = result[0]
+        timestamps = res0.get("timestamp", [])
+        closes     = res0.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+        closes     = [c for c in closes if c is not None]
         if len(closes) < lookback_bars + 1:
             logger.warning(f"Equity {symbol}: not enough bars ({len(closes)}) for {lookback_bars}-bar lookback")
             return None
+
+        # Staleness check: if the last bar is >30 min old, the market is closed
+        # (equity futures close Fri 5pm ET → reopen Sun 5pm ET; no live data on weekends).
+        if timestamps:
+            last_bar_age = time.time() - timestamps[-1]
+            if last_bar_age > 1800:
+                logger.info(
+                    f"Equity {symbol}: last bar {int(last_bar_age // 60)}m old — market closed, skipping"
+                )
+                return None
+
         then  = closes[-(lookback_bars + 1)]
         now   = closes[-1]
         return round((now - then) / then, 6)

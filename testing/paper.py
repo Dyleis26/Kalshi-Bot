@@ -29,6 +29,9 @@ from data.trades import TradeLog
 from strategy.base import Strategy, LONG, SHORT, NONE
 from strategy.sports import SportsStrategy
 from administration.logger import get as get_logger, log_trade, log_halt
+import data.kalshi_market_log as market_log
+import data.btc_signal_log as signal_log
+import data.sports_outcome_log as sports_log
 
 logger = get_logger("paper")
 
@@ -187,7 +190,9 @@ class Trader:
 
         logger.info("Trader running. BTC driven by WebSocket; MLB/NBA/NHL polled every 2 min.")
 
-        self._resume_open_trades()
+        # Clear all persisted position state on every restart — no open trades carry over.
+        # This keeps every session fully isolated for clean testing.
+        self._clear_position_state()
 
         if NEWS_ENABLED:
             t = threading.Thread(
@@ -289,10 +294,52 @@ class Trader:
         with self._lock:
             df_1h_snap  = state["df_1h"].copy()
             df_15m_snap = state["df_15m"].copy()
+
         decision = self.strategy.decide(df_1h_snap, df_15m_snap, asset="BTC")
+
+        # Log every window to the market observer. Kalshi sometimes returns 1.0
+        # for the new market in the first ~30s after :00/:15/:30/:45. If that
+        # happens, spawn a background thread to retry after 30s.
+        def _try_log_market_open(btc_price: float, attempts: int = 3):
+            for _ in range(attempts):
+                time.sleep(30)
+                try:
+                    # Refetch the ticker — the old window's ticker always returns 1.0
+                    m = self.kalshi.get_market_for_asset("BTC")
+                    t = m.get("ticker") if m else None
+                    if not t:
+                        continue
+                    yes, no = self.kalshi.get_market_prices(t)
+                    if 0.05 <= yes <= 0.95:
+                        market_log.log_open(t, yes, no, btc_price)
+                        return
+                except Exception:
+                    return
+
+        try:
+            _obs_ticker = self._get_ticker_for_slot("BTC")
+            if _obs_ticker:
+                _obs_yes, _obs_no = self.kalshi.get_market_prices(_obs_ticker)
+                _obs_btc = float(state.get("price", 0))
+                if 0.05 <= _obs_yes <= 0.95:
+                    market_log.log_open(_obs_ticker, _obs_yes, _obs_no, _obs_btc)
+                else:
+                    # Market transitioning — retry in background with fresh ticker
+                    _t = threading.Thread(
+                        target=_try_log_market_open,
+                        args=(_obs_btc,),
+                        daemon=True
+                    )
+                    _t.start()
+        except Exception:
+            pass
 
         direction = decision["direction"]
         self.monitor.record_signal(direction, decision["signals"])
+
+        # Log every BTC window to signal history (trade=False for now; marked
+        # True later if _execute_crypto_trade actually places an order).
+        signal_log.log_window(decision, traded=False)
 
         if direction == NONE:
             logger.info(f"BTC: no trade — {decision['reason']}")
@@ -485,6 +532,12 @@ class Trader:
         _m   = _now.minute - (_now.minute % 15)
         settlement_open = _now.replace(minute=_m, second=0, microsecond=0, tzinfo=None)
 
+        # Mark this window as traded in the market log
+        try:
+            market_log.log_trade(market_log.current_window_str(), direction)
+        except Exception:
+            pass
+
         self._place_and_monitor(
             slot_key=slot_key,
             slot_type="crypto",
@@ -619,6 +672,32 @@ class Trader:
             if direction == NONE:
                 logger.info(f"{slot_key} [{ticker}]: no trade — {decision['reason']}")
                 continue
+
+            # Log this evaluation to the sports outcome tracker.
+            # Only fires for non-NONE decisions (edge exceeded threshold, ESPN matched).
+            # traded=False for now; updated to True if the trade actually executes.
+            _log_game = {
+                "game_id":    decision.get("game_id", ""),
+                "is_live":    is_ingame,
+                "period":     decision.get("game_period", ""),
+                "home_score": decision.get("home_score", ""),
+                "away_score": decision.get("away_score", ""),
+                "score_diff": (decision.get("home_score", 0) or 0) -
+                               (decision.get("away_score", 0) or 0),
+            }
+            sports_log.log_evaluation(
+                sport=slot_cfg["label"],
+                game=_log_game,
+                ticker=ticker,
+                title=decision.get("market_label", ""),
+                yes_team=decision.get("market_label", ""),
+                model_prob=decision.get("external_prob", 0.0),
+                kalshi_yes=decision.get("kalshi_yes", yes_ask),
+                edge=decision.get("edge", 0.0),
+                direction=direction,
+                traded=False,
+                prob_source=decision.get("prob_source", ""),
+            )
 
             # Stale market guard (apply only to in-game sports markets)
             if is_ingame and slot_type == "sports":
@@ -798,6 +877,8 @@ class Trader:
                 bet_size=size,
                 confidence_pct=c["decision"].get("confidence_pct", 0.0),
             )
+            # Mark the sports outcome log row as actually traded
+            sports_log.update_result(ticker=c["ticker"], result="open", pnl=0.0)
             traded = True
             break  # one trade per slot per poll cycle
 
@@ -923,6 +1004,8 @@ class Trader:
 
         log_trade(direction, contract_price, total_cost, confidence_pct=confidence_pct,
                   slot_type=slot_type, market_label=market_label)
+        if slot_type == "crypto":
+            signal_log.mark_traded(signal_log.current_window())
         self.monitor.record_order_placed()
         self.discord.buy(
             direction=direction,
@@ -1227,6 +1310,14 @@ class Trader:
                     )["wins"] += 1
             log_trade(direction, contract_price, actual_cost, result="win", pnl=pnl,
                       confidence_pct=confidence_pct, slot_type=slot_type, market_label=market_label)
+            try:
+                if slot_type == "crypto" and settlement_open is not None:
+                    _w = settlement_open.strftime("%Y-%m-%d %H:%M")
+                    market_log.log_outcome(_w, "win", float(last_candle.get("open", 0)), float(last_candle.get("close", 0)))
+                elif slot_type == "sports" and kalshi_ticker:
+                    sports_log.update_result(ticker=kalshi_ticker, result="win", pnl=pnl)
+            except Exception:
+                pass
             self._save_session_state()
             self.monitor.record_trade_result("win")
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
@@ -1267,6 +1358,14 @@ class Trader:
                         del self._tracked_windows[_k]
             log_trade(direction, contract_price, actual_cost, result="loss", pnl=pnl,
                       confidence_pct=confidence_pct, slot_type=slot_type, market_label=market_label)
+            try:
+                if slot_type == "crypto" and settlement_open is not None:
+                    _w = settlement_open.strftime("%Y-%m-%d %H:%M")
+                    market_log.log_outcome(_w, "loss", float(last_candle.get("open", 0)), float(last_candle.get("close", 0)))
+                elif slot_type == "sports" and kalshi_ticker:
+                    sports_log.update_result(ticker=kalshi_ticker, result="loss", pnl=pnl)
+            except Exception:
+                pass
             self._save_session_state()
             self.monitor.record_trade_result("loss")
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
@@ -1487,6 +1586,28 @@ class Trader:
                     json.dump(existing, _f)
             except Exception as exc:
                 logger.warning(f"Could not remove open trade {trade_id}: {exc}")
+
+    def _clear_position_state(self):
+        """
+        Wipe all persisted position files on startup so every restart begins
+        with zero open trades and no carry-over state.
+        """
+        files_to_clear = [
+            (_OPEN_TRADES_FILE,    "{}"),     # open trade monitoring threads
+            (_TRADE_STATE_FILE,    "{}"),     # last BTC window traded (prevents same-window re-entry)
+            (_SPORTS_STATE_FILE,   "{}"),     # sports game counts / daily budget
+            (_SESSION_STATE_FILE,  "{}"),     # session W/L counters
+        ]
+        cleared = []
+        for path, empty in files_to_clear:
+            try:
+                with open(path, "w") as _f:
+                    _f.write(empty)
+                cleared.append(os.path.basename(path))
+            except Exception:
+                pass
+        if cleared:
+            logger.info(f"Position state cleared on startup: {', '.join(cleared)}")
 
     def _resume_open_trades(self):
         """

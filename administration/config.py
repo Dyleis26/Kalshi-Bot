@@ -67,15 +67,18 @@ SLOTS = {
 NUM_SLOTS = len(SLOTS)  # 4 — BTC, MLB, NBA, NHL
 
 # --- Non-crypto slot settings ---
-MARKET_EVAL_INTERVAL_SECS  = 60    # Poll sports slots every 60s — faster in-game edge capture
+MARKET_EVAL_INTERVAL_SECS  = 30    # Poll sports slots every 30s — faster in-game lag capture
 # Sports close_time is weeks away (settlement); game_date_filter (ticker date) is used instead.
-SPORTS_EDGE_MIN            = 0.07  # In-game edge threshold (lowered from 0.10 — trade more often)
-SPORTS_PREGAME_EDGE_MIN    = 0.05  # Pre-game edge when vote score ≥ SPORTS_PREGAME_VOTE_MIN
-SPORTS_PREGAME_VOTE_MIN    = 4     # Min winner-prediction votes (out of 6) to unlock lower pre-game threshold
+SPORTS_EDGE_MIN            = 0.12  # In-game LONG edge threshold
+SPORTS_SHORT_EDGE_MIN      = 0.20  # In-game SHORT requires larger edge — higher confidence bar
+SPORTS_PREGAME_EDGE_MIN    = 0.10  # Pre-game LONG edge when vote score ≥ SPORTS_PREGAME_VOTE_MIN
+SPORTS_PREGAME_VOTE_MIN    = 5     # Min winner-prediction votes (out of 6) to unlock pre-game threshold
                                    # Votes: implied_prob>0.55(+2), L10(+1), venue_record(+1), H2H(+1), line_move(+1)
-SPORTS_CONTRACT_PRICE_MIN  = 0.20  # In-game price floor
+SPORTS_PREGAME_SHORT       = False # Disable pre-game SHORT — only LONG on confident pre-game winners
+SPORTS_SHORT_MAX_NO_PRICE  = 0.65  # Block SHORT if NO ask > 0.65 — paying >65¢ for max $0.35 return is bad math
+SPORTS_CONTRACT_PRICE_MIN  = 0.35  # In-game price floor (raised from 0.20 — no more extreme underdog buys)
 SPORTS_CONTRACT_PRICE_MAX  = 0.80  # In-game price ceiling
-SPORTS_PREGAME_PRICE_MIN   = 0.35  # Pre-game floor (widened from 0.40 for more pre-game trades)
+SPORTS_PREGAME_PRICE_MIN   = 0.40  # Pre-game floor (raised from 0.35 — tighter near-fair zone)
 SPORTS_PREGAME_PRICE_MAX   = 0.70  # Pre-game ceiling
 SPORTS_INGAME_COOLOFF_MINS = 20    # Minimum minutes between re-entries on same live market
 SPORTS_MAX_GAMES_PER_SLOT  = 5     # Max unique game matchups per sports slot per day
@@ -98,11 +101,17 @@ MOMENTUM_MIN = 0.001    # Minimum 0.10% price move to be directional (was 0.05% 
 MOMENTUM_LOOKBACK = 3   # Candles to look back for momentum (3 × 15m = 45 min)
 MACD_MIN = 0.0003       # Neutral deadband: histogram must exceed 0.03% of price to count
                         # Normalized by current price in signals.py so it works across all assets
-VWAP_MIN_PCT = 0.001    # Price must be 0.10%+ away from VWAP to count as directional
-MIN_CONFIDENCE = 4    # Minimum votes (out of 8) to enter — 4/8 = 50% agreement
-                      # Safe at lower confidence because bet size is small (10% of slot capital ≈ $6)
-                      # More trades + smaller sizes = better data + lower variance than fewer big bets
-FORCE_TRADE = False   # Only trade when MIN_CONFIDENCE signals agree; skip uncertain windows
+VWAP_MIN_PCT = 0.002    # Block trade if price is >0.20% from VWAP (already overextended)
+# --- BTC Streak Mean-Reversion Strategy ---
+# After STREAK_LENGTH consecutive closes in one direction, bet the reverse.
+# STREAK_MACD_CONFIRM=True: also require MACD histogram to agree (higher WR, lower frequency).
+#   STREAK_LENGTH=2, STREAK_MACD_CONFIRM=False → ~33% windows, ~68% WR (out-of-sample)
+#   STREAK_LENGTH=2, STREAK_MACD_CONFIRM=True  → ~11% windows, ~79% WR (out-of-sample)
+STREAK_LENGTH      = 2     # Consecutive same-direction closes required to trigger
+STREAK_MACD_CONFIRM = True   # Require MACD to confirm (True = higher WR, lower frequency)
+
+MIN_CONFIDENCE = 2    # Minimum confidence to place trade (1 = streak alone, 2 = streak+MACD)
+FORCE_TRADE = False
 
 # --- Execution ---
 LIMIT_ORDER_OFFSET = 0.02   # Place limit 2 cents below ask

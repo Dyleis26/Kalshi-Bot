@@ -114,9 +114,9 @@ VWAP_MIN_PCT = 0.002    # Block trade if price is >0.20% from VWAP (already over
 #   STREAK_LENGTH=2, STREAK_MACD_CONFIRM=False → ~33% windows, ~68% WR (out-of-sample)
 #   STREAK_LENGTH=2, STREAK_MACD_CONFIRM=True  → ~11% windows, ~79% WR (out-of-sample)
 STREAK_LENGTH      = 2     # Consecutive same-direction closes required to trigger
-STREAK_MACD_CONFIRM = True   # Require MACD to confirm (True = higher WR, lower frequency)
+STREAK_MACD_CONFIRM = False  # Require MACD to confirm (True = higher WR, lower frequency)
 
-MIN_CONFIDENCE = 2    # Minimum confidence to place trade (1 = streak alone, 2 = streak+MACD)
+MIN_CONFIDENCE = 1    # Minimum confidence to place trade (1 = streak alone, 2 = streak+MACD)
 FORCE_TRADE = False
 
 # --- Execution ---

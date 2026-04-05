@@ -1195,7 +1195,7 @@ class Trader:
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
                 direction=direction, contracts=contracts, contracts_filled=contracts,
-                price_pct=exit_price * 100, pnl=pnl, portfolio_total=port_total,
+                price_pct=contract_price * 100, pnl=pnl, portfolio_total=port_total,
                 market_label=market_label,
                 session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )
@@ -1216,7 +1216,7 @@ class Trader:
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(
                 direction=direction, contracts=contracts, contracts_filled=contracts,
-                price_pct=exit_price * 100, pnl=pnl, portfolio_total=port_total,
+                price_pct=contract_price * 100, pnl=pnl, portfolio_total=port_total,
                 market_label=market_label,
                 session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )
@@ -1332,7 +1332,7 @@ class Trader:
             self.trade_log.close_trade(trade_id, "win", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_win(
                 direction=direction, contracts=contracts, contracts_filled=contracts,
-                price_pct=100.0, pnl=pnl, portfolio_total=port_total,
+                price_pct=contract_price * 100, pnl=pnl, portfolio_total=port_total,
                 market_label=market_label,
                 session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )
@@ -1380,7 +1380,7 @@ class Trader:
             self.trade_log.close_trade(trade_id, "loss", pnl, fee_paid, last_candle, port_summary)
             self.discord.sell_loss(
                 direction=direction, contracts=contracts, contracts_filled=contracts,
-                price_pct=0.0, pnl=pnl, portfolio_total=port_total,
+                price_pct=contract_price * 100, pnl=pnl, portfolio_total=port_total,
                 market_label=market_label,
                 session_wins=s_wins, session_losses=s_losses, session_pnl=s_pnl,
             )

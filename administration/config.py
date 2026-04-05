@@ -113,7 +113,7 @@ VWAP_MIN_PCT = 0.002    # Block trade if price is >0.20% from VWAP (already over
 # STREAK_MACD_CONFIRM=True: also require MACD histogram to agree (higher WR, lower frequency).
 #   STREAK_LENGTH=2, STREAK_MACD_CONFIRM=False → ~33% windows, ~68% WR (out-of-sample)
 #   STREAK_LENGTH=2, STREAK_MACD_CONFIRM=True  → ~11% windows, ~79% WR (out-of-sample)
-STREAK_LENGTH      = 2     # Consecutive same-direction closes required to trigger
+STREAK_LENGTH      = 1     # Consecutive same-direction closes required to trigger
 STREAK_MACD_CONFIRM = False  # Require MACD to confirm (True = higher WR, lower frequency)
 
 MIN_CONFIDENCE = 1    # Minimum confidence to place trade (1 = streak alone, 2 = streak+MACD)
@@ -173,8 +173,8 @@ SPORTS_MAX_BET_PCT      = 0.25   # Hard cap: no single sports game bet exceeds 2
 # Only trade when YES is in this range — outside it the payout asymmetry makes
 # positive EV mathematically impossible even with accurate signals.
 # YES=0.65 requires 68%+ accuracy to break even; YES=0.50 requires only ~52%.
-CONTRACT_PRICE_MIN = 0.52
-CONTRACT_PRICE_MAX = 0.65
+CONTRACT_PRICE_MIN = 0.40
+CONTRACT_PRICE_MAX = 0.75
 CONTRACT_BUY_MIN   = 0.05  # Hard floor on actual purchase price — blocks near-zero contracts
 CONTRACT_BUY_MAX   = 0.95  # Hard cap on actual purchase price — blocks illiquid NO asks (e.g. no_ask=0.98)
 

@@ -94,7 +94,7 @@ class Discord:
             title=f"🚀 BUY: {market_label}",
             color=BLUE,
             description="\n".join([
-                f"**Contracts:** {fill_str} @ {price_pct:.0f}%",
+                f"**Contracts:** {fill_str} @ {price_pct:.0f}¢",
                 f"**Cost:** ${display_cost:.2f}",
                 f"**Payout:** ${payout:.2f}",
                 f"**Portfolio:** ${portfolio_total:.2f}",
@@ -116,7 +116,7 @@ class Discord:
             title=f"✅ SELL: {market_label}",
             color=GREEN,
             description="\n".join([
-                f"**Contracts:** {fill_str} @ {price_pct:.0f}%",
+                f"**Contracts:** {fill_str} @ {price_pct:.0f}¢",
                 f"**Result:** Win",
                 f"**P&L:** +${pnl:.2f}",
                 f"**Portfolio:** ${portfolio_total:.2f}",
@@ -138,7 +138,7 @@ class Discord:
             title=f"❌ SELL: {market_label}",
             color=RED,
             description="\n".join([
-                f"**Contracts:** {fill_str} @ {price_pct:.0f}%",
+                f"**Contracts:** {fill_str} @ {price_pct:.0f}¢",
                 f"**Result:** Loss",
                 f"**P&L:** -${abs(pnl):.2f}",
                 f"**Portfolio:** ${portfolio_total:.2f}",
